@@ -13,7 +13,7 @@ release. For a private repository, list the assets' API URLs instead (docs/PUBLI
 import argparse, gzip, hashlib, io, json, os, shutil, sys, tarfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO = 'JustAnotherPU/ridetube'
+REPO = 'planetapokera2-debug/ridetube-vpn'   # VPN build; the original: JustAnotherPU/ridetube
 APP = 'jap_ridetube'
 TOOLS = ('jap-ridetube-d',)
 
@@ -52,6 +52,9 @@ def artifact(path, base):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--base', default='https://github.com/%s/releases/download/catalog/' % REPO)
+    # VPN build: the app is unchanged - its package as JustAnotherPU published it (already without oap-sdk), so no
+    # BMW oap-sdk is needed here; the source: https://github.com/JustAnotherPU/ridetube/releases/tag/catalog
+    ap.add_argument('--app-package', help='a published app package (jap_ridetube@<version>.tgz) used as it is')
     a = ap.parse_args()
     mtime = int(os.environ.get('SOURCE_DATE_EPOCH', '0'))
     out = os.path.join(ROOT, 'dist', 'release')
@@ -61,13 +64,19 @@ def main():
     app = json.load(open(os.path.join(ROOT, 'apps', APP, 'app.json')))
     tools = {t: json.load(open(os.path.join(ROOT, 'native', t, 'component.json'))) for t in TOOLS}
     pkg = os.path.join(ROOT, 'dist', '%s@%s.tgz' % (APP, app['version']))
-    if not os.path.isfile(pkg):
-        sys.exit('release.py: %s missing (python3 kit/tools/build.py %s)' % (pkg, APP))
-    strip_sdk(pkg, os.path.join(out, os.path.basename(pkg)), mtime)
-    # the local build's packages hold BMW's oap-sdk: only dist/release/ is ever uploaded, so they go
-    for f in (pkg, pkg[:-4] + '.mgu'):
-        if os.path.exists(f):
-            os.remove(f)
+    if a.app_package:
+        assert os.path.basename(a.app_package) == os.path.basename(pkg), 'app package is not version %s' % app['version']
+        with tarfile.open(a.app_package, 'r:gz') as t:
+            assert not any('oap-sdk' in n for n in t.getnames()), 'oap-sdk in the package'
+        shutil.copy(a.app_package, os.path.join(out, os.path.basename(pkg)))
+    else:
+        if not os.path.isfile(pkg):
+            sys.exit('release.py: %s missing (python3 kit/tools/build.py %s)' % (pkg, APP))
+        strip_sdk(pkg, os.path.join(out, os.path.basename(pkg)), mtime)
+        # the local build's packages hold BMW's oap-sdk: only dist/release/ is ever uploaded, so they go
+        for f in (pkg, pkg[:-4] + '.mgu'):
+            if os.path.exists(f):
+                os.remove(f)
     for t, c in tools.items():
         kit = os.path.join(ROOT, 'native', t, 'dist', '%s@%s.tgz' % (t, c['version']))
         if not os.path.isfile(kit):
