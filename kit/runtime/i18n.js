@@ -46,6 +46,8 @@ function t(value) {
         out = s.slice(0, s.indexOf(key)) + dict[key] + s.slice(s.indexOf(key) + key.length);
     } else if (Object.prototype.hasOwnProperty.call(folded, key.toLowerCase())) {
         out = s.slice(0, s.indexOf(key)) + folded[key.toLowerCase()] + s.slice(s.indexOf(key) + key.length);
+    } else if (locale.exact) {
+        out = s;   // whole texts only (the VPN build's RideTube: video titles go through the HMI's text too)
     } else {
         // Short words need context: "min 70" is a minimum, "12 min" is minutes.
         out = language === 'zh-CN' ? s.replace(/\bmin(?=\s+-?\d)/g, '最小').replace(/\bmax(?=\s+-?\d)/g, '最大')

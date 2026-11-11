@@ -85,7 +85,7 @@ function qualityHeight(q, lease) {
 }
 // members-only (or members-first) videos: a badge somewhere in the tile, its shape unknown (no capture) - matched on the text
 // shortcut: a JSON scan of the tile, swap for the badge's field once a real members tile is captured
-const isMembers = (t) => /BADGE_STYLE_TYPE_MEMBERS|"Members (only|first)"/i.test(JSON.stringify(t));
+const isMembers = (t) => /BADGE_STYLE_TYPE_MEMBERS|"Members (only|first)"|"(Только|Сначала) для спонсоров"/i.test(JSON.stringify(t));
 const PERMANENT_RE = /unavailable|private|removed|terminated|copyright|members|age|confirm your age|not available in your country/i;
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 function withTimeout(p, ms, what) {
@@ -291,6 +291,9 @@ function fetchRequest(o, uid, req) {
 const YT = 'https://www.youtube.com';
 const TV_UA = 'Mozilla/5.0 (Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1';
 const TV_CLIENT = { clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'en' };
+// feeds and search in Russian, for Russia (VPN build): shelf titles, "N просмотров", "N дней назад". The player
+// request stays English: PERMANENT_RE reads its refusals
+const FEED_CLIENT = Object.assign({}, TV_CLIENT, { hl: 'ru', gl: 'RU' });
 const CRED_RE = /clientId:"([-\w]+\.apps\.googleusercontent\.com)",\n?[$\w]+:"([-\w]+)"/;
 const SCOPE = 'http://gdata.youtube.com https://www.googleapis.com/auth/youtube-paid-content';
 const TOKEN_URL = YT + '/o/oauth2/token';
@@ -609,7 +612,7 @@ Account.prototype.refresh = async function (a, out) {
     throw new Error('refresh: ' + (j.error || r.status));
 };
 Account.prototype.browse = function (browseId, token) {
-    return this.json('POST', YT + '/youtubei/v1/browse', { context: { client: TV_CLIENT }, browseId: browseId }, { Authorization: 'Bearer ' + token });
+    return this.json('POST', YT + '/youtubei/v1/browse', { context: { client: FEED_CLIENT }, browseId: browseId }, { Authorization: 'Bearer ' + token });
 };
 // `feed` {which: home|subs|wl} -> feed{which, items, shelves} or feed{which, error}
 Account.prototype.feed = function (which) {
@@ -1139,7 +1142,7 @@ Daemon.prototype.prune = function () {
 Daemon.prototype.search = async function (q) {
     q = typeof q === 'string' ? q.trim() : '';
     if (!q) return this.emit({ ev: 'error', msg: 'empty search' });
-    const ask = (tok) => this.account.json('POST', YT + '/youtubei/v1/search', { context: { client: TV_CLIENT }, query: q },
+    const ask = (tok) => this.account.json('POST', YT + '/youtubei/v1/search', { context: { client: FEED_CLIENT }, query: q },
         tok ? { Authorization: 'Bearer ' + tok } : null);
     let r;
     try {

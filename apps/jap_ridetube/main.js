@@ -44,6 +44,7 @@ const G = require('./kit/gauges');
 const QR = require('./kit/qr');
 const { setImage } = require('./kit/record');
 const { HMI } = require('./kit/display');
+const { tr, short } = require('./tr');
 const Parked = require('./kit/parked');
 const { Ctl, Model, clock, SOCKET, FEEDS, SHELF_MAX } = require('./yt');
 const { spell } = require('./speller');
@@ -58,10 +59,10 @@ const X0 = 136, TW = 320, TH = 180, PITCH = 348, PER_ROW = 4;   // tiles: 16:9 t
 const TILE_H = TH + 98, HEAD_H = 50, SHELF_GAP = 30, GRID_GAP = 22;   // a tile with its text; a shelf's title row
 const OVERLAY_MS = 4000;                                 // the player's controls hide this long after a tap (playing)
 const SEARCH_MS = 8000;                                  // a search with no answer by then is an error on screen
-const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'];
+const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'].map((x) => tr(x));
 const SLOTS = ['BTN_S1', 'BTN_S2', 'BTN_S3', 'BTN_S4', 'BTN_S5', 'BTN_S6'];
 const TABS = ['home', 'subs', 'wl'];
-const NAMES = { home: 'Home', subs: 'Subscriptions', wl: 'Watch later', results: 'Results' };
+const NAMES = { home: tr('Home'), subs: tr('Subscriptions'), wl: tr('Watch later'), results: tr('Results') };
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 
@@ -84,7 +85,7 @@ mgu.run({
         const ctl = new Ctl(process.env.MGU_YT_SOCKET || SOCKET, log);
         const model = new Model((o) => ctl.send(o));
         let mode = 'home', browse = 'home', dirty = true;   // browse: the list the player goes back to
-        const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); };
+        const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); leftPlay(); };
         const isFeed = (m) => FEEDS.indexOf(m) >= 0;
         // a feed tab: signed in, (re)load it; signed out, ask for a sign-in code (the daemon says the one shown again).
         // A new device flow starts only from here (show), the account button or the page's "tap" - never on its own
@@ -145,9 +146,9 @@ mgu.run({
             show('results');
             ui.open('VIEW');
         }
-        ui.onClick('BTN_SEARCH', () => spell(ctx.app, 'Search videos')
+        ui.onClick('BTN_SEARCH', () => spell(ctx.app, tr('Search videos'))
             .then((t) => search(t))
-            .catch((e) => { log.error('speller', e); ui.text('MAIN_INFO', 'The keyboard did not open: ' + (e.message || e)); }));
+            .catch((e) => { log.error('speller', e); ui.text('MAIN_INFO', tr('The keyboard did not open: %s', e.message || e)); }));
         SLOTS.forEach((b, i) => ui.onClick(b, () => search(slots()[i])));
         ui.onClick('BTN_NOW', () => { show('player'); ui.open('VIEW'); });
         ui.onClick('BTN_RESULTS', () => { show('results'); ui.open('VIEW'); });
@@ -165,11 +166,11 @@ mgu.run({
 
         function info() {
             let s;
-            if (!model.connected) s = 'The RideTube service (jap-ridetube-d) is not running';
-            else if (model.searchError) s = 'Search: ' + model.searchError;
-            else if (model.error) s = 'Error: ' + model.error;
-            else if (model.active()) s = (model.state === 'preparing' ? 'Preparing ' + Math.round(model.pct) + ' %: ' : model.state === 'paused' ? 'Paused: ' : 'Playing: ') + model.title;
-            else s = 'Search, or pick a recent search below';
+            if (!model.connected) s = tr('The RideTube service (jap-ridetube-d) is not running');
+            else if (model.searchError) s = tr('Search: %s', model.searchError);
+            else if (model.error) s = tr('Error: %s', model.error);
+            else if (model.active()) s = (model.state === 'preparing' ? tr('Preparing %s %: ', Math.round(model.pct)) : model.state === 'paused' ? tr('Paused: ') : tr('Playing: ')) + model.title;
+            else s = tr('Search, or pick a recent search below');
             ui.text('MAIN_INFO', s);
         }
         info();
@@ -208,11 +209,11 @@ mgu.run({
         }
         let lastPlay = null, lastList = null, lastAcct = null;
         function labels() {
-            const p = model.state === 'playing' ? 'Pause' : 'Play';
+            const p = tr(model.state === 'playing' ? 'Pause' : 'Play');
             if (p !== lastPlay) { lastPlay = p; ui.text('BTN_PLAY', p); }
-            const l = mode === 'player' ? NAMES[browse] : model.active() ? 'Now playing' : 'Player';
+            const l = mode === 'player' ? NAMES[browse] : tr(model.active() ? 'Now playing' : 'Player');
             if (l !== lastList) { lastList = l; ui.text('BTN_LIST', l); }
-            const a = model.auth.state !== 'signed_in' ? 'Sign in' : signOutArmed ? 'Press again to sign out' : 'Sign out';
+            const a = tr(model.auth.state !== 'signed_in' ? 'Sign in' : signOutArmed ? 'Press again to sign out' : 'Sign out');
             if (a !== lastAcct) { lastAcct = a; ui.text('BTN_ACCOUNT', a); }
         }
         ui.onClick('BTN_PLAY', () => model.toggle());
@@ -237,14 +238,14 @@ mgu.run({
         }
         const shownAt = () => Math.max(0, Math.min(model.total > 0 ? model.total : Infinity, model.elapsed + pend));
         // preparing: its percentage, or the network lost and the daemon trying again
-        const prepText = () => (model.retry ? 'No connection - trying again (' + model.retry + ')...' : 'Preparing... ' + Math.round(model.pct || 0) + ' %');
+        const prepText = () => (model.retry ? tr('No connection - trying again (%s)...', model.retry) : tr('Preparing... %s %', Math.round(model.pct || 0)));
         // a failed play: Try again (the same video, the queue kept)
         const again = () => { if (model.id) play(model.id, model.item(model.id)); };
         /* ---------- SponsorBlock: per category Skip, a Skip button (ask) or Off (Settings) ---------- */
         const SB = [['sponsor', 'sponsor'], ['selfpromo', 'self-promotion'], ['interaction', 'subscribe reminder'], ['intro', 'intro'], ['outro', 'end cards'], ['music_offtopic', 'non-music part']];
         const sbMode = (cat) => settings.get('sb_' + cat) || 'off';
         const sbSkip = () => SB.map((c) => c[0]).filter((c) => sbMode(c) === 'skip');
-        const sbName = (cat) => (SB.find((c) => c[0] === cat) || [0, 'segment'])[1];
+        const sbName = (cat) => tr((SB.find((c) => c[0] === cat) || [0, 'segment'])[1]);
         const sbSegs = (ex) => ex.segments.filter((g) => sbMode(g[2]) !== 'off');
         const sbColor = (g) => (sbMode(g[2]) === 'ask' ? '#ffd400' : '#00d400');
         // the segment the clock is in whose category asks: its Skip button shows (and the overlay stays)
@@ -254,6 +255,29 @@ mgu.run({
             return ex.segments.find((g) => sbMode(g[2]) === 'ask' && t >= g[0] && t < g[1] - 1000) || null;
         }
         const sbJump = (g) => () => model.skip(g[1] - shownAt());
+
+        /* ---------- leaving the app (VPN build, setting "Pause when leaving the app"): none of its screens shown for
+         * 2 s, it pauses; a video still being prepared then pauses once it starts. Played again from elsewhere (the
+         * car's media controls) while away, it plays on: only the leaving pauses ---------- */
+        let awayT = null, awayPrep = false;
+        const oursShown = () => ['VIEW', 'MAIN'].some((n) => ui.isVisible(n));
+        const leaveOn = () => settings.get('stop_on_leave') !== false;
+        function leftCheck() {
+            clearTimeout(awayT); awayT = null; awayPrep = false;
+            if (oursShown() || !leaveOn()) return;
+            awayT = setTimeout(() => {
+                awayT = null;
+                if (oursShown() || !leaveOn()) return;
+                if (model.state === 'playing') { log.info('left the app: paused'); model.toggle(); }
+                else if (model.state === 'preparing') awayPrep = true;
+            }, 2000);
+        }
+        function leftPlay() {
+            if (!awayPrep || model.state === 'preparing') return;
+            awayPrep = false;
+            if (model.state === 'playing' && !oursShown() && leaveOn()) { log.info('left the app while preparing: paused'); model.toggle(); }
+        }
+        ui.onVisible(() => leftCheck());
 
         /* ---------- the 12 V battery while parked: a warning 5 points above the setting's level, paused below it ---------- */
         let soc = null, socWarned = false;
@@ -267,10 +291,10 @@ mgu.run({
             if (parked.moving() || model.state !== 'playing') return;          // driving charges it
             if (soc < lim) {
                 model.toggle();
-                model.toast = { text: '12 V battery at ' + soc + ' % - paused. Start the car to keep watching', until: Date.now() + 15000, warn: true };
+                model.toast = { text: tr('12 V battery at %s % - paused. Start the car to keep watching', soc), until: Date.now() + 15000, warn: true };
             } else if (soc < lim + 5 && !socWarned) {
                 socWarned = true;
-                model.toast = { text: '12 V battery at ' + soc + ' % - it pauses at ' + lim + ' %', until: Date.now() + 8000, warn: true };
+                model.toast = { text: tr('12 V battery at %s % - it pauses at %s %', soc, lim), until: Date.now() + 8000, warn: true };
             } else return;
             wake(); changed();
         }
@@ -399,7 +423,7 @@ mgu.run({
                 const cx = 62, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
                 if (on) { cv.roundRect(18, cy - 38, 90, 84, 16, bg); cv.roundRect(18, cy - 14, 5, 28, 2.5, C.red); }
                 glyph(cv, cx, cy - 8, c, bg);
-                cv.text(name === 'Subscriptions' ? 'Subs' : name, cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
+                cv.text(short(name === 'Subscriptions' ? 'Subs' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
                 if (cv.own) cv.target(16, cy - 38, 92, 84, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
             });
         }
@@ -427,9 +451,9 @@ mgu.run({
             }
             if (cur) {
                 cv.strokeRoundRect(x - 2, y - 2, TW + 4, TH + 4, 14, 3, C.red);
-                const pw = cv.textWidth('NOW PLAYING', 16, { literal: true, font: 'bold', spacing: 1 }) + 20;
+                const pw = cv.textWidth(tr('NOW PLAYING'), 16, { literal: true, font: 'bold', spacing: 1 }) + 20;
                 cv.roundRect(x + 10, y + 10, pw, 28, 6, C.red);
-                cv.text('NOW PLAYING', x + 20, y + 30, 16, '#ffffff', { literal: true, font: 'bold', spacing: 1 });
+                cv.text(tr('NOW PLAYING'), x + 20, y + 30, 16, '#ffffff', { literal: true, font: 'bold', spacing: 1 });
             }
             const lines = wrap(cv, String(r.title || r.id));
             lines.forEach((l, k) => cv.text(l, x, y + TH + 32 + k * 30, 24, C.text, LITB));
@@ -467,7 +491,7 @@ mgu.run({
         // the channels, filtered by chanQ (the keyboard: one letter = names starting with it, else names holding it)
         let chanQ = '';
         function findChannel() {
-            spell(ctx.app, 'Find a channel').then((t) => {
+            spell(ctx.app, tr('Find a channel')).then((t) => {
                 if (t === null || t === undefined) { ui.open('VIEW'); return; }
                 chanQ = String(t).trim(); vs('subs').sy = 0; vs('subs').off = {}; dirty = true;
                 show('subs'); ui.open('VIEW');
@@ -477,24 +501,24 @@ mgu.run({
         function openChannel(c) { if (mode !== 'channel') chanFrom = mode; model.openChannel(c.id, c.title); show('channel'); vs('channel').sy = 0; vs('channel').off = {}; }
         function chanSections() {
             const ch = model.chans;
-            if (!ch || (!ch.items.length && ch.loading)) return [{ title: 'Channels', sub: 'Loading...', items: [], chan: true }];
-            if (!ch.items.length) return ch.error ? [{ title: 'Channels', sub: ch.error, items: [], chan: true }] : [];
-            const find = { id: '::find', title: chanQ ? 'Search again' : 'Search channels', sub: 'A letter, or a word', act: findChannel, glyph: KEYS };
-            if (!chanQ) return [{ title: 'Channels', sub: ch.items.length + ' subscriptions, A-Z', items: [find].concat(ch.items), chan: true }];
+            if (!ch || (!ch.items.length && ch.loading)) return [{ title: tr('Channels'), sub: tr('Loading...'), items: [], chan: true }];
+            if (!ch.items.length) return ch.error ? [{ title: tr('Channels'), sub: ch.error, items: [], chan: true }] : [];
+            const find = { id: '::find', title: tr(chanQ ? 'Search again' : 'Search channels'), sub: tr('A letter, or a word'), act: findChannel, glyph: KEYS };
+            if (!chanQ) return [{ title: tr('Channels'), sub: tr('%s subscriptions, A-Z', ch.items.length), items: [find].concat(ch.items), chan: true }];
             const hits = model.findChannels(chanQ);
-            const all = { id: '::all', title: 'All channels', sub: ch.items.length + ' subscriptions', act: () => { chanQ = ''; vs('subs').off = {}; dirty = true; }, glyph: ALL };
-            return [{ title: (chanQ.length === 1 ? 'Channels starting with “' : 'Channels matching “') + chanQ + '”',
-                sub: hits.length ? hits.length + (hits.length === 1 ? ' channel' : ' channels') : 'none', items: [find, all].concat(hits), chan: true, grid: true }];
+            const all = { id: '::all', title: tr('All channels'), sub: tr('%s subscriptions', ch.items.length), act: () => { chanQ = ''; vs('subs').off = {}; dirty = true; }, glyph: ALL };
+            return [{ title: tr(chanQ.length === 1 ? 'Channels starting with “%s”' : 'Channels matching “%s”', chanQ),
+                sub: hits.length ? tr(hits.length === 1 ? '%s channel' : '%s channels', hits.length) : tr('none'), items: [find, all].concat(hits), chan: true, grid: true }];
         }
         function drawChannel(cv) {
             const c = model.chan;
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (!c) return say(cv, 'Pick a channel in Subscriptions');
-            if (!c.items.length) return say(cv, c.loading ? 'Loading ' + (c.title || 'the channel') + '...' : c.error === 'feed offline' ? 'The video service is not reachable - check the car\'s internet connection' : c.error || 'No videos on this channel', c.title || null);
+            if (!c) return say(cv, tr('Pick a channel in Subscriptions'));
+            if (!c.items.length) return say(cv, c.loading ? tr('Loading %s...', c.title || tr('the channel')) : c.error === 'feed offline' ? tr('The video service is not reachable - check the car\'s internet connection') : c.error || tr('No videos on this channel'), c.title || null);
             const hid = hidden.indexOf(c.title) >= 0;
-            const tog = { id: '::hide', title: hid ? 'Show this channel' : 'Hide this channel', sub: hid ? 'Hidden from Home, Subscriptions, Search' : 'From Home, Subscriptions and Search',
+            const tog = { id: '::hide', title: tr(hid ? 'Show this channel' : 'Hide this channel'), sub: tr(hid ? 'Hidden from Home, Subscriptions, Search' : 'From Home, Subscriptions and Search'),
                 act: () => toggleHidden(c.title), glyph: hid ? SHOW : BLOCK };
-            drawPage(cv, (c.shelves && c.shelves.length ? c.shelves : [{ title: 'Videos', items: c.items, grid: true }])
+            drawPage(cv, (c.shelves && c.shelves.length ? c.shelves : [{ title: tr('Videos'), items: c.items, grid: true }])
                 .map((s, i) => (i === 0 ? Object.assign({}, s, { title: c.title + (s.title ? ' · ' + s.title : ''), items: [tog].concat(s.items) }) : s)));
         }
 
@@ -636,32 +660,32 @@ mgu.run({
             cv.text(fit(cv, msg, 34, 1360, LIT), browsing() ? MID : W / 2, 290, 34, '#ffffff', { literal: true, align: 'center' });
             if (sub) cv.text(fit(cv, sub, 24, 1360, LIT), browsing() ? MID : W / 2, 336, 24, C.dim, { literal: true, align: 'center' });
         }
-        const OFF = 'The RideTube service (jap-ridetube-d) is not running';
-        const OFF2 = 'Install the RideTube service (jap-ridetube-d) from the MGU Store';
+        const OFF = tr('The RideTube service (jap-ridetube-d) is not running');
+        const OFF2 = tr('Install the RideTube service (jap-ridetube-d) from the MGU Store');
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (model.searching) return say(cv, 'Searching "' + model.q + '"...');
-            if (model.searchError) return say(cv, 'Search: ' + model.searchError, 'Try again from Search');
-            if (!model.results.length) return say(cv, model.q ? 'Nothing found for "' + model.q + '"' : 'Search (bar button) to find videos', model.q ? 'Try other words' : null);
-            drawPage(cv, [{ title: 'Results for “' + model.q + '”', items: shown(model.results), grid: true }]);
+            if (model.searching) return say(cv, tr('Searching "%s"...', model.q));
+            if (model.searchError) return say(cv, tr('Search: %s', model.searchError), tr('Try again from Search'));
+            if (!model.results.length) return say(cv, model.q ? tr('Nothing found for "%s"', model.q) : tr('Search (bar button) to find videos'), model.q ? tr('Try other words') : null);
+            drawPage(cv, [{ title: tr('Results for “%s”', model.q), items: shown(model.results), grid: true }]);
         }
         function drawFeed(cv, which) {
             const f = model.feeds[which], a = model.auth.state;
             if (!model.connected) return say(cv, OFF, OFF2);
-            if (a === 'unsupported') return say(cv, 'Signing in needs a newer jap-ridetube-d tool on the car');
+            if (a === 'unsupported') return say(cv, tr('Signing in needs a newer jap-ridetube-d tool on the car'));
             if (a !== 'signed_in') return drawSignIn(cv);
             const chans = which === 'subs' && model.chans && model.chans.items.length;   // the channels show without the videos
             if ((!f || !f.items.length) && !chans) {
-                return say(cv, !f || f.loading ? 'Loading ' + NAMES[which] + '...' : f.error === 'feed offline' ? 'The video service is not reachable - check the car\'s internet connection'
-                    : f.error ? NAMES[which] + ': ' + f.error : which === 'wl' ? 'Nothing in Watch later' : 'No videos here yet', which === 'wl' && f && !f.loading && !f.error ? 'Videos you save for later show here' : null);
+                return say(cv, !f || f.loading ? tr('Loading %s...', NAMES[which]) : f.error === 'feed offline' ? tr('The video service is not reachable - check the car\'s internet connection')
+                    : f.error ? NAMES[which] + ': ' + f.error : tr(which === 'wl' ? 'Nothing in Watch later' : 'No videos here yet'), which === 'wl' && f && !f.loading && !f.error ? tr('Videos you save for later show here') : null);
             }
             let secs;
             if (which === 'home') {
                 const wl = model.feeds.wl;
-                secs = (model.resume.length ? [{ title: 'Continue watching', items: model.resume }] : [])
-                    .concat(f.shelves || [{ title: 'Recommended', items: f.items, grid: true }])
-                    .concat(wl && wl.items.length ? [{ title: 'Watch later', items: wl.items.slice(0, SHELF_MAX) }] : []);
-            } else secs = !f ? [] : f.shelves && which !== 'wl' ? f.shelves : [{ title: NAMES[which], sub: f.items.length + ' videos', items: f.items, grid: true }];
+                secs = (model.resume.length ? [{ title: tr('Continue watching'), items: model.resume }] : [])
+                    .concat(f.shelves || [{ title: tr('Recommended'), items: f.items, grid: true }])
+                    .concat(wl && wl.items.length ? [{ title: tr('Watch later'), items: wl.items.slice(0, SHELF_MAX) }] : []);
+            } else secs = !f ? [] : f.shelves && which !== 'wl' ? f.shelves : [{ title: NAMES[which], sub: tr('%s videos', f.items.length), items: f.items, grid: true }];
             if (which === 'subs') secs = chanSections().concat(chanQ || !f || !f.items.length ? [] : secs);
             drawPage(cv, secs.map((sc) => (sc.chan ? sc : Object.assign({}, sc, { items: shown(sc.items) }))).filter((sc) => sc.chan || sc.items.length));
         }
@@ -670,17 +694,17 @@ mgu.run({
             const a = model.auth;
             // a code expired or refused, or signed out: a new one only when asked (a tap, or Sign in in the menu)
             if (a.state === 'error' || a.state === 'signed_out') {
-                say(cv, a.state === 'error' ? 'Sign-in is not available (' + (a.msg || 'error') + ') - tap to try again'
-                    : cv.own ? 'Tap here to get a sign-in code' : 'Sign in (menu) to get a sign-in code',
-                'Your Home, Subscriptions and Watch later, on the car');
+                say(cv, a.state === 'error' ? tr('Sign-in is not available (%s) - tap to try again', a.msg || tr('error'))
+                    : tr(cv.own ? 'Tap here to get a sign-in code' : 'Sign in (menu) to get a sign-in code'),
+                tr('Your Home, Subscriptions and Watch later, on the car'));
                 if (cv.own) cv.target(MID - 520, 160, 1040, 200, () => model.authStart(true), 'signin', 16);
                 return;
             }
-            if (a.state !== 'code' || !a.code) return say(cv, 'Getting a sign-in code...');
+            if (a.state !== 'code' || !a.code) return say(cv, tr('Getting a sign-in code...'));
             let url = /^https:\/\//.test(a.url || '') ? a.url : SIGNIN_URL, q;
             try { q = QR.encode(url); } catch (e) { url = SIGNIN_URL; q = QR.encode(url); }   // longer than a version 4 code holds
-            const code = { literal: true, font: 'bold', spacing: 6 }, cwid = cv.textWidth(a.code, 54, code), hint = 'Scan the code, or go to ' + url.replace(/^https:\/\/(www\.)?/, '');
-            const side = (q.length + 8) * 8, textW = Math.max(cwid + 56, cv.textWidth(hint, 26, LIT), 88 + cv.textWidth('Sign in', 44, LITB), 560);
+            const code = { literal: true, font: 'bold', spacing: 6 }, cwid = cv.textWidth(a.code, 54, code), hint = tr('Scan the code, or go to %s', url.replace(/^https:\/\/(www\.)?/, ''));
+            const side = (q.length + 8) * 8, textW = Math.max(cwid + 56, cv.textWidth(hint, 26, LIT), 88 + cv.textWidth(tr('Sign in'), 44, LITB), 560);
             const cw = Math.min(1400, 44 + side + 80 + textW + 64), ch = 444, cx = Math.round(MID - cw / 2), cy = TOP + Math.max(14, Math.round((H + (cv.own ? cv.extra : 0) - TOP - ch) / 2)), dy = cy - 58;
             cv.roundRect(cx, cy, cw, ch, 24, C.card);
             const qx = cx + 44, qy = cy + Math.round((ch - side) / 2);
@@ -688,12 +712,12 @@ mgu.run({
             QR.draw(cv, url, qx, qy, 8);
             const tx = qx + side + 80;
             logo(cv, tx + 34, 128 + dy, 68);
-            cv.text('Sign in', tx + 88, 144 + dy, 44, '#ffffff', LITB);
-            cv.text('Enter this code on your phone', tx, 214 + dy, 30, C.dim, LIT);
+            cv.text(tr('Sign in'), tx + 88, 144 + dy, 44, '#ffffff', LITB);
+            cv.text(tr('Enter this code on your phone'), tx, 214 + dy, 30, C.dim, LIT);
             cv.roundRect(tx, 238 + dy, cwid + 56, 96, 16, C.bg);
             cv.text(a.code, tx + 28, 308 + dy, 54, '#ffffff', code);
             cv.text(hint, tx, 392 + dy, 26, C.dim, LIT);
-            cv.text('The account stays on the car; this app never sees a password', tx, 440 + dy, 20, '#717171', LIT);
+            cv.text(tr('The account stays on the car; this app never sees a password'), tx, 440 + dy, 20, '#717171', LIT);
         }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');
@@ -708,7 +732,7 @@ mgu.run({
                 if (it && it.channel) cv.text(fit(cv, it.channel, 22, BOX.w - 60, LIT), BOX.x + 30, BOX.y + 82, 22, '#cccccc', LIT);
             }
             let mid = null;
-            if (!model.connected) mid = 'The RideTube service (jap-ridetube-d) is not running';
+            if (!model.connected) mid = OFF;
             else if (model.state === 'preparing') {
                 const p = Math.max(0, Math.min(100, model.pct || 0));
                 cv.circle(cx, cy - 20, 54, '#00000099');
@@ -716,11 +740,11 @@ mgu.run({
                 if (p > 0) cv.arc(cx, cy - 20, 44, 52, 0, p * 3.6, C.red, { round: true });
                 cv.text(Math.round(p) + '%', cx, cy - 10, 30, '#ffffff', { literal: true, font: 'bold', align: 'center' });
                 cv.text(prepText(), cx, cy + 82, 26, '#dddddd', { literal: true, align: 'center' });
-            } else if (model.state === 'error') mid = 'Error: ' + (model.error || 'playback stopped');
-            else if (!model.active()) mid = model.state === 'ended' ? 'Finished' : 'Pick a video on Home or Search';
-            else if (noVideo()) mid = 'Video stops while driving - the sound plays on';
-            else if (!cv.place || !gpu()) mid = 'The picture needs the GPU renderer (mgu-render) - the sound plays';
-            else if (!videoShown) mid = 'Starting the picture...';
+            } else if (model.state === 'error') mid = tr('Error: %s', model.error || tr('playback stopped'));
+            else if (!model.active()) mid = tr(model.state === 'ended' ? 'Finished' : 'Pick a video on Home or Search');
+            else if (noVideo()) mid = tr('Video stops while driving - the sound plays on');
+            else if (!cv.place || !gpu()) mid = tr('The picture needs the GPU renderer (mgu-render) - the sound plays');
+            else if (!videoShown) mid = tr('Starting the picture...');
             if (model.state === 'paused' && !mid) { cv.circle(cx, cy, 60, '#000000a0'); cv.arc(cx, cy, 57, 60, 0, 360, '#ffffff50'); tri(cv, cx + 5, cy, 46, '#ffffff'); }
             if (mid) {
                 if (model.state === 'paused') { cv.circle(cx, cy - 40, 46, '#000000a0'); tri(cv, cx + 4, cy - 40, 36, '#ffffff'); }
@@ -750,10 +774,10 @@ mgu.run({
             cv.fillRect(0, 0, SW, SH, C.bg);
             const x0 = LX + 46, top = 40, ch = model.channel || (model.item(model.id) || {}).channel;
             cv.text('RideTube', x0, top + 30, 34, '#ffffff', LITB);
-            const chip = 'Podcast mode · driving', cw = cv.textWidth(chip, 22, LIT) + 40;
+            const chip = tr('Podcast mode · driving'), cw = cv.textWidth(chip, 22, LIT) + 40;
             cv.roundRect(x0 + 170, top, cw, 40, 20, C.ph);
             cv.text(chip, x0 + 170 + cw / 2, top + 28, 22, C.dim, { literal: true, align: 'center' });
-            cv.text('Video returns when parked', SW - 60, top + 28, 22, '#717171', { literal: true, align: 'right' });
+            cv.text(tr('Video returns when parked'), SW - 60, top + 28, 22, '#717171', { literal: true, align: 'right' });
             // laid out from the bottom: the notice / up-next row, the controls, the bar; the artwork takes what is left
             const cy = SH - 178, by = cy - 128, ay = top + 72, ah = Math.max(120, by - 56 - ay), aw = Math.round(ah * 16 / 9), ax = x0;
             const th = model.thumbs[model.id];
@@ -807,13 +831,13 @@ mgu.run({
                 big('ov:next', nx, 58, false, () => { const r = queue.shift(); play(r.id, r); }, (c) => {
                     cv.quad([[nx - 22, cy - 26], [nx - 22, cy + 26], [nx + 12, cy], [nx - 22, cy - 26]], c); cv.fillRect(nx + 14, cy - 26, 9, 52, c);
                 });
-                const up = 'Up next  ·  ' + String(queue[0].title || queue[0].id), uw = Math.min(700, cv.textWidth(up, 26, LIT) + 50);
+                const up = tr('Up next  ·  %s', String(queue[0].title || queue[0].id)), uw = Math.min(700, cv.textWidth(up, 26, LIT) + 50);
                 cv.roundRect(SW - 60 - uw, SH - 96, uw, 64, 16, '#1c1c1c');
                 cv.text(fit(cv, up, 26, uw - 50, LIT), SW - 60 - uw + 25, SH - 54, 26, '#dddddd', LIT);
             }
             const ask = askSeg();
             if (ask) {
-                const tt = 'Skip ' + sbName(ask[2]), w2 = cv.textWidth(tt, 30, LITB) + 80, f = focusKey === 'ov:sbskip';
+                const tt = tr('Skip %s', sbName(ask[2])), w2 = cv.textWidth(tt, 30, LITB) + 80, f = focusKey === 'ov:sbskip';
                 cv.roundRect(x0, SH - 100, w2, 72, 36, f ? '#3ea6ff' : '#ffffff');
                 cv.text(tt, x0 + 40, SH - 52, 30, f ? '#ffffff' : C.bg, LITB);
                 tg(x0, SH - 100, w2, 72, run(sbJump(ask)), 'ov:sbskip', 36);
@@ -822,7 +846,7 @@ mgu.run({
                 cv.roundRect(x0, SH - 96, w2, 64, 32, wn ? '#4a3a10' : '#1f3d1f');
                 cv.text(tt, x0 + 30, SH - 54, 26, wn ? '#ffd27a' : '#7ee07e', LIT);
             }
-            if (model.state === 'error') cv.text(fit(cv, 'Error: ' + (model.error || 'playback stopped'), 28, bw, LIT), x0, SH - 54, 28, '#ff6b6b', LIT);
+            if (model.state === 'error') cv.text(fit(cv, tr('Error: %s', model.error || tr('playback stopped')), 28, bw, LIT), x0, SH - 54, 28, '#ff6b6b', LIT);
         }
         function drawFull(cv) {
             const pl = cv.place, s = pl.scale, SW = pl.w / s, SH = pl.h / s, dx = pl.ox / s, dy = pl.oy / s;
@@ -858,7 +882,7 @@ mgu.run({
                 ctl('ov:qr', px, by, 30, () => { qrUntil = qrUntil > Date.now() ? 0 : Date.now() + 30000; }, (c) => {
                     cv.strokeRoundRect(px - 10, by - 17, 20, 34, 4, 3, c); cv.fillRect(px - 4, by + 10, 8, 3, c);
                 });
-                cv.text('On phone', px - 42, by + 9, 24, '#ffffff', Object.assign({}, LIT, { align: 'right' }));
+                cv.text(tr('On phone'), px - 42, by + 9, 24, '#ffffff', Object.assign({}, LIT, { align: 'right' }));
             }
             if (model.id && qrUntil > Date.now()) {
                 const url = 'https://youtu.be/' + model.id + (model.elapsed > 5000 ? '?t=' + Math.floor(model.elapsed / 1000) : ''), mod = 8;
@@ -866,8 +890,8 @@ mgu.run({
                 cv.roundRect(qx0, qy0, cw, chh, 24, '#212121f2');
                 cv.roundRect(qx0 + 30 - 6, qy0 + 30 - 6, side + 12, side + 12, 18, '#ffffff');
                 QR.draw(cv, url, qx0 + 30, qy0 + 30, mod);
-                cv.text('Continue on your phone', qx0 + side + 80, qy0 + chh / 2 - 20, 34, '#ffffff', LITB);
-                cv.text('Scan with the camera to go on from ' + clock(model.elapsed), qx0 + side + 80, qy0 + chh / 2 + 24, 22, '#cccccc', LIT);
+                cv.text(tr('Continue on your phone'), qx0 + side + 80, qy0 + chh / 2 - 20, 34, '#ffffff', LITB);
+                cv.text(tr('Scan with the camera to go on from %s', clock(model.elapsed)), qx0 + side + 80, qy0 + chh / 2 + 24, 22, '#cccccc', LIT);
                 tg(qx0, qy0, cw, chh, () => { qrUntil = 0; wake(); }, 'ov:qrcard', 24);
                 cv.xf();
                 return;
@@ -875,15 +899,15 @@ mgu.run({
             // middle: -10 s, play / pause, +10 s; preparing: the ring with the percentage
             let mid = null;
             if (!model.connected) mid = OFF;
-            else if (model.state === 'error') mid = 'Error: ' + (model.error || 'playback stopped');
+            else if (model.state === 'error') mid = tr('Error: %s', model.error || tr('playback stopped'));
             const up = upNext;
             if (up) {
-                mid = 'Up next in ' + Math.max(1, Math.ceil((nextAt - Date.now()) / 1000)) + ' s: ' + String(up.title || up.id);
+                mid = tr('Up next in %s s: %s', Math.max(1, Math.ceil((nextAt - Date.now()) / 1000)), String(up.title || up.id));
                 ctl('ov:play', cx, cy, 58, () => { nextAt = 1; }, (c) => tri(cv, cx + 5, cy, 46, c));
-            } else if (!act && model.state !== 'error') mid = model.state === 'ended' ? 'Finished' : 'Pick a video on Home or Search';
-            else if (noVideo()) mid = 'Video stops while driving - the sound plays on';
-            else if (!gpu()) mid = 'The picture needs the GPU renderer (mgu-render) - the sound plays';
-            else if (live && !videoShown) mid = 'Starting the picture...';
+            } else if (!act && model.state !== 'error') mid = tr(model.state === 'ended' ? 'Finished' : 'Pick a video on Home or Search');
+            else if (noVideo()) mid = tr('Video stops while driving - the sound plays on');
+            else if (!gpu()) mid = tr('The picture needs the GPU renderer (mgu-render) - the sound plays');
+            else if (live && !videoShown) mid = tr('Starting the picture...');
             if (model.state === 'preparing') {
                 const p = Math.max(0, Math.min(100, model.pct || 0));
                 cv.circle(cx, cy, 56, '#00000099');
@@ -906,16 +930,16 @@ mgu.run({
                 // right: Video quality (a press takes the next one; the video starts again there) and zoom (fill crops)
                 const qv = String(settings.get('quality') || 'auto'), fl = settings.get('fill') !== false, qx = SW - 330, zx = SW - 150;
                 ctl('ov:q', qx, cy, 42, () => { const q = QUALITIES[(QUALITIES.indexOf(qv) + 1) % QUALITIES.length]; settings.set('quality', q); model.quality(q); },
-                    (c) => cv.text(qv === 'auto' ? 'Auto' : qv + 'p', qx, cy + 8, 22, c, { literal: true, font: 'bold', align: 'center' }));
-                cv.text('Quality', qx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
+                    (c) => cv.text(qv === 'auto' ? tr('Auto') : qv + 'p', qx, cy + 8, 22, c, { literal: true, font: 'bold', align: 'center' }));
+                cv.text(tr('Quality'), qx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
                 ctl('ov:zoom', zx, cy, 42, () => { settings.set('fill', !fl); model.fill(!fl); }, (c) => {
                     cv.strokeRoundRect(zx - 22, cy - 15, 44, 30, 4, 3, c);
                     if (fl) cv.fillRect(zx - 22, cy - 15, 44, 30, c); else cv.fillRect(zx - 12, cy - 15, 24, 30, c);
                 });
-                cv.text(fl ? 'Unzoom' : 'Zoom', zx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
+                cv.text(tr(fl ? 'Unzoom' : 'Zoom'), zx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
             } else if (model.state === 'error' && model.id && model.connected) {
                 ctl('ov:play', cx, cy, 58, again, (c) => retryGlyph(cv, cx, cy, 26, c));
-                cv.text('Try again', cx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
+                cv.text(tr('Try again'), cx, cy + 100, 26, '#dddddd', { literal: true, align: 'center' });
             }
             if (mid) cv.text(fit(cv, mid, 30, SW - 2 * LX, LIT), cx, model.state === 'preparing' || live || up || (model.state === 'error' && model.id) ? cy + 150 : cy + 10, 30, '#ffffff', { literal: true, align: 'center' });
             // bottom: the progress bar (the track, the part played, the scrubber) and the times
@@ -941,7 +965,7 @@ mgu.run({
             }
             const ask = live && askSeg();
             if (ask) {
-                const tt = 'Skip ' + sbName(ask[2]), w2 = cv.textWidth(tt, 28, LITB) + 70, sx = SW - 60 - w2, sy = SH - 168, f = focusKey === 'ov:sbskip';
+                const tt = tr('Skip %s', sbName(ask[2])), w2 = cv.textWidth(tt, 28, LITB) + 70, sx = SW - 60 - w2, sy = SH - 168, f = focusKey === 'ov:sbskip';
                 cv.roundRect(sx, sy, w2, 60, 30, f ? '#ffffff' : '#3a3a3ae6');
                 cv.text(tt, sx + 35, sy + 40, 28, f ? '#0f0f0f' : '#ffffff', LITB);
                 tg(sx, sy, w2, 60, run(sbJump(ask)), 'ov:sbskip', 30);

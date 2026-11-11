@@ -1,5 +1,15 @@
 # Changelog
 
+## App 0.3.11, service 0.3.11 (VPN build, modified version)
+
+- In Russian: the service asks YouTube's feeds and search in Russian, for Russia (hl ru, gl RU: shelf titles,
+  "N просмотров", "N дней назад"; the player request stays English, its refusals are read). The app's own words
+  (tr.js, locale-ru.json), the settings and sheets (the kit's locale.json, whole texts only, so video titles are
+  never touched) and the HMI's static texts are Russian; the search suggestions too.
+- Pause when leaving the app (a setting, on by default): none of the app's screens shown for 2 s, the video
+  pauses; still being prepared, it pauses once it starts. A check box added to the HMI menu's settings.
+- The tests remove their folders (the renderer stream there grew to tens of MB a run).
+
 ## App 0.3.10 (VPN build, modified version)
 
 - The controller's knob turns through the videos one by one: along a shelf, then on to the next shelf's first

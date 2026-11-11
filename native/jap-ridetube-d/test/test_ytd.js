@@ -176,7 +176,7 @@ async function main() {
         const r = ytCalls('/youtubei/v1/search')[0];
         assert.strictEqual(r.method, 'POST');
         assert.strictEqual(r.headers, null, 'anonymous');
-        assert.deepStrictEqual(r.body, { context: { client: { clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'en' } }, query: 'bunny' });
+        assert.deepStrictEqual(r.body, { context: { client: { clientName: 'TVHTML5', clientVersion: '7.20251101.10.00', hl: 'ru', gl: 'RU' } }, query: 'bunny' });
         yt.search = () => Promise.reject(new Error('ENETUNREACH'));
         c.send({ cmd: 'search', q: 'x' });
         await c.waitFor((x) => x.ev === 'error' && x.msg === 'search offline');

@@ -18,6 +18,7 @@
  *          The daemon stops playback within 1 s of this socket closing, so the app keeps it open hidden too.
  *   Model  what the screens show, from the daemon's events; the commands the buttons send. Pure: no HMI, no timers.
  */
+const { tr } = require('./tr');
 const net = require('net');
 
 const SOCKET = '/run/jap-ridetube-d/ctl.sock';
@@ -193,7 +194,7 @@ class Model {
             if (m.id === this.id) this.retry = Number(m.n) || 1;   // the fetch failed (the network): the daemon tries again
         } else if (m.ev === 'skipped') {
             const names = { sponsor: 'sponsor', selfpromo: 'self-promotion', interaction: 'like & subscribe reminder', intro: 'intro' };
-            this.toast = { text: 'Skipped ' + (names[m.category] || 'segment') + ' · ' + clock(m.ms), until: Date.now() + 4000 };
+            this.toast = { text: tr('Skipped %s · %s', tr(names[m.category] || 'segment'), clock(m.ms)), until: Date.now() + 4000 };
         } else if (m.ev === 'time') {
             if (typeof m.elapsed === 'number') this.elapsed = m.elapsed;
             if (typeof m.total === 'number') this.total = m.total;

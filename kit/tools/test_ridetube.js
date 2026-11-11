@@ -16,6 +16,16 @@ const { Ctl, Model, clock } = require('../../apps/jap_ridetube/yt');
 
 const quiet = { info() {}, warn() {}, error(m, e) { throw e || new Error(m); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// the test's folders (the renderer stream there grows to tens of MB): removed when it ends, either way
+const tmps = [];
+function tmp(prefix) { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); tmps.push(d); return d; }
+function rmTree(p) {        // (Node 8: no fs.rmSync)
+    let st;
+    try { st = fs.lstatSync(p); } catch (e) { return; }
+    if (st.isDirectory()) { fs.readdirSync(p).forEach((n) => rmTree(path.join(p, n))); try { fs.rmdirSync(p); } catch (e) { /* busy */ } } else try { fs.unlinkSync(p); } catch (e) { /* gone */ }
+}
+process.on('exit', () => tmps.forEach(rmTree));
+
 async function until(fn, ms, what) {
     const end = Date.now() + (ms || 3000);
     while (!fn()) { if (Date.now() > end) throw new Error('timed out: ' + what); await sleep(10); }
@@ -47,7 +57,7 @@ function fakeDaemon(sock) {
 }
 
 async function clientAndModel() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-'));
+    const dir = tmp('yt-');
     const sock = path.join(dir, 'ctl.sock');
     const d = await fakeDaemon(sock);
     const ctl = new Ctl(sock, quiet);
@@ -265,7 +275,7 @@ function scan(s) {
 async function appFrames() {
     const stage = path.join(__dirname, '..', '..', 'dist', 'jap_ridetube');
     if (!fs.existsSync(path.join(stage, 'source', 'javascript', 'app.js'))) { console.log('skip app frames (python3 kit/tools/build.py jap_ridetube first)'); return; }
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-app-'));
+    const dir = tmp('yt-app-');
     const sock = path.join(dir, 'ctl.sock'), file = path.join(dir, 'stream.bin');
     const d = await fakeDaemon(sock);
     process.env.MGU_YT_SOCKET = sock;
@@ -282,6 +292,13 @@ async function appFrames() {
     hu.ctx.hideButton = (id, hide) => disp.hideButton(id, hide);
     hu.ctx.onPageFocus = (fn) => { disp.onPageFocus = fn; };
     hu.ctx.onKnob = (fn) => { disp.onKnob = fn; };
+    // (this stub raises no visibility events: leaving the app is played by these two)
+    const visFns = [], isVis = hu.ui.isVisible;
+    let away = false;
+    hu.ui.onVisible = (fn) => visFns.push(fn);
+    hu.ui.isVisible = (n) => !away && isVis(n);
+    const leave = () => { away = true; visFns.forEach((fn) => fn('VIEW', false)); };
+    const back = () => { away = false; visFns.forEach((fn) => fn('VIEW', true)); };
     hu.ctx.focus = (k) => disp.focusPage(k);
     hu.start();
     await until(() => d.cmds('auth_status').length, 3000, 'app connects and asks for the account');
@@ -385,6 +402,21 @@ async function appFrames() {
         hu.ctx.settings.set('battery', '0');
         await hu.loopFn();
         console.log('ok   SponsorBlock Skip button (ask), 12 V battery guard');
+        // leaving the app (VPN build, Pause when leaving the app: on by default): none of its screens for 2 s pauses;
+        // back within 2 s, or the setting off, it plays on
+        assert.strictEqual(hu.ctx.settings.get('stop_on_leave'), true, 'pause when leaving: on by default');
+        const nLeave = d.cmds('pause').length;
+        leave(); await sleep(800); back(); await sleep(1700);
+        assert.strictEqual(d.cmds('pause').length, nLeave, 'back within 2 s: plays on');
+        hu.ctx.settings.set('stop_on_leave', false);
+        leave(); await sleep(2300); back();
+        assert.strictEqual(d.cmds('pause').length, nLeave, 'the setting off: plays on');
+        hu.ctx.settings.set('stop_on_leave', true);
+        leave();
+        await until(() => d.cmds('pause').length > nLeave, 3000, 'left the app: paused');
+        back(); speedH({ speedVehicleCentreOfGravity: 0 });   // (the speed read 5 s ago is stale by now: parked again)
+        await sleep(300); await hu.loopFn();
+        console.log('ok   pause when leaving the app (2 s), not when back in time or with the setting off');
         disp.onTap(800, 300);
         await hu.loopFn();
         const hid = disp.pageTargets;
