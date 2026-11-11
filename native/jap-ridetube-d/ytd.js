@@ -7,6 +7,8 @@
 // 0.1.6: feed{which, items, shelves:[{title, items}]}, items carry meta (the tile's second line).
 // The car fetches (ytfetch.py), searches (InnerTube) and makes thumbs (thumb.js) itself, all as the fetch uid; playback starts while the video is still being fetched.
 // It never exits on its own: a stray exception is logged, audio is released, it goes idle.
+// RideTube VPN: while a SOCKS5 proxy listens on opts.socks (127.0.0.1:1065: bmw-vpn, jap-wireproxy), every request
+// (InnerTube, sign-in, SponsorBlock, thumbnails, yt-dlp) goes through it; nothing listening - directly, as before.
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
@@ -14,6 +16,7 @@ const https = require('https');
 const crypto = require('crypto');
 const cp = require('child_process');
 const readline = require('readline');
+const socksLib = require('./socks');
 
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
@@ -53,6 +56,9 @@ function defaults() {
         warmMs: 600000,      // ... for this long after the app's last command
         infoMaxMs: 1500000,
         leaseFile: '/run/mgu-uplink/lease.json',
+        // RideTube VPN: the local SOCKS5 proxy, used while it listens (probed every socksProbeMs); '' - never
+        socks: env.MGU_YT_SOCKS !== undefined ? env.MGU_YT_SOCKS : socksLib.DEFAULT,
+        socksProbeMs: 5000,
         resume: true,        // a play starts where the video was left (positions.json)
         sponsorBlock: 'https://sponsor.ajay.app/api/skipSegments/',
         skip: ['sponsor', 'selfpromo', 'interaction', 'intro'], // SponsorBlock categories skipped (the play's own `skip` wins)
@@ -291,8 +297,20 @@ const TOKEN_URL = YT + '/o/oauth2/token';
 const FEEDS = { home: 'FEwhat_to_watch', subs: 'FEsubscriptions', wl: 'VLWL' };
 const FEED_MAX = 50;
 
-// method, url, headers, body (JSON or null) -> {status, body (utf8)}; no redirects (none seen on these URLs)
-function ytRequest(method, url, headers, body, timeoutMs, lookup) {
+// method, url, headers, body (JSON or null) -> {status, body (utf8)}; no redirects (none seen on these URLs).
+// socks ("host:port"): through that SOCKS5 proxy, the name resolved by the proxy (lookup unused)
+function ytRequest(method, url, headers, body, timeoutMs, lookup, socks) {
+    if (!socks) return httpsRequest(method, url, headers, body, timeoutMs, { lookup: lookup });
+    const u = require('url').parse(url), t0 = Date.now();
+    return socksLib.connectTls(socks, u.hostname, Number(u.port) || 443, timeoutMs || 10000).then(function (sock) {
+        // an agent that hands out this one socket: Node 8 and 22 both take a socket returned at once
+        const agent = new https.Agent({ keepAlive: false });
+        agent.createConnection = function () { return sock; };
+        return httpsRequest(method, url, headers, body, Math.max(1000, (timeoutMs || 10000) - (Date.now() - t0)), { agent: agent })
+            .then(function (r) { sock.destroy(); return r; }, function (e) { sock.destroy(); throw e; });
+    });
+}
+function httpsRequest(method, url, headers, body, timeoutMs, via) {
     return new Promise(function (resolve, reject) {
         const u = require('url').parse(url);
         const data = body ? Buffer.from(JSON.stringify(body)) : null;
@@ -300,7 +318,7 @@ function ytRequest(method, url, headers, body, timeoutMs, lookup) {
         if (data) { h['Content-Type'] = 'application/json'; h['Content-Length'] = data.length; }
         let done = false, size = 0;
         const fail = function (e) { if (!done) { done = true; clearTimeout(timer); reject(e); } };
-        const req = https.request({ hostname: u.hostname, port: u.port, path: u.path, method: method, headers: h, lookup: lookup }, function (res) {
+        const req = https.request(Object.assign({ hostname: u.hostname, port: u.port, path: u.path, method: method, headers: h }, via), function (res) {
             const chunks = [];
             res.on('data', function (c) {
                 size += c.length;
@@ -781,6 +799,7 @@ function Daemon(o) {
     this.childFetch = !this.opts.ytRequest;
     if (this.childFetch) this.opts.ytRequest = (m, u, h, b, t) => this.fetch({ method: m, url: u, headers: h, body: b, timeoutMs: t });
     this.fetchUid = null;
+    this.socksUp = false;
     this.account = new Account(this.opts, (o) => this.emit(o));
 }
 // the fetch uid (picked on first need; none: an error naming why, never a crash)
@@ -793,7 +812,19 @@ Daemon.prototype.uid = function () {
 };
 // youtube.com, as the fetch uid
 Daemon.prototype.fetch = function (req) {
-    try { return fetchRequest(this.opts, this.uid(), req); } catch (e) { return Promise.reject(e); }
+    try { return fetchRequest(this.opts, this.uid(), Object.assign({ socks: this.socks() }, req)); } catch (e) { return Promise.reject(e); }
+};
+// RideTube VPN: the proxy while it listens, else null (directly). Probed at start and every socksProbeMs
+Daemon.prototype.socks = function () { return this.opts.socks && this.socksUp ? this.opts.socks : null; };
+Daemon.prototype.probeSocks = function () {
+    return new Promise((resolve) => {
+        if (!this.opts.socks) return resolve(false);
+        socksLib.listening(this.opts.socks, 500, (ok) => {
+            if (ok !== this.socksUp) this.log('vpn: SOCKS5 ' + this.opts.socks + (ok ? ' listens: YouTube through it' : ' not listening: directly'));
+            this.socksUp = ok;
+            resolve(ok);
+        });
+    });
 };
 // a helper (ytfetch.py, thumb.js) as the fetch uid, as fetchRequest spawns its child
 Daemon.prototype.spawnFetchUid = function (cmd, args, stdin) {
@@ -907,6 +938,8 @@ Daemon.prototype.skipSegments = function () {
 // ---- speed: a warm ytfetch.py (yt-dlp loaded: ~1.2 s on the car) takes the next job, and the stream lookup
 // (~2.5 s) runs while the controller rests on a tile (prefetch), so a play skips both
 Daemon.prototype.spawnJob = function (job) {
+    const px = this.socks();
+    if (px) job = [job[0], '--proxy', 'socks5h://' + px].concat(job.slice(1));   // yt-dlp and the audio's Range requests
     const s = this.spare;
     this.spare = null;
     if (s && s.child.exitCode === null && s.child.signalCode === null) { // still loading: serve reads the job once warm
@@ -932,7 +965,8 @@ Daemon.prototype.keepWarm = function () {
     child.on('error', (e) => this.log('spare: ' + e.message));
     child.on('close', () => { if (this.spare === s) this.spare = null; });
 };
-Daemon.prototype.infoFile = function (id) { return path.join(this.opts.cacheDir, 'ytdlp', 'info', id + '.json'); };
+// stream URLs are bound to the address that looked them up: one looked up through the VPN is not used directly, nor back
+Daemon.prototype.infoFile = function (id) { return path.join(this.opts.cacheDir, 'ytdlp', 'info', id + (this.socks() ? '.vpn' : '') + '.json'); };
 Daemon.prototype.freshInfo = function (id) {
     try { return Date.now() - fs.statSync(this.infoFile(id)).mtime.getTime() < this.opts.infoMaxMs; } catch (e) { return false; }
 };
@@ -969,6 +1003,8 @@ Daemon.prototype.start = async function () {
     this.listen();
     // the uplink learns our fetch uid at start (its 5 s rescan), before anyone signs in
     if (this.childFetch && this.fetchUid === null) { try { this.fetchUid = pickFetchUid(this.opts); } catch (e) { this.log('internet uid: ' + e.message); } }
+    await this.probeSocks();
+    this.timers.push(setInterval(() => this.guard(() => this.probeSocks()), this.opts.socksProbeMs));
     this.timers.push(setInterval(() => this.guard(() => this.watchdog()), 1000));
     this.timers.push(setInterval(() => this.guard(() => this.keepWarm()), this.opts.tickMs));
     this.keepWarm();
@@ -1140,7 +1176,8 @@ Daemon.prototype.thumb = async function (id) {
 // thumb.js <id> as the fetch uid: exactly 320x180 RGBA on stdout, exit 0; killed after 10 s
 Daemon.prototype.thumbFetch = function (id) {
     return new Promise((resolve, reject) => {
-        const child = this.spawnFetchUid(this.opts.thumbCmd, [id]);
+        const px = this.socks();
+        const child = this.spawnFetchUid(this.opts.thumbCmd, [id].concat(px ? ['--socks', px] : []));
         const out = [], err = [];
         let size = 0;
         const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) { /* gone */ } }, 10000);
@@ -1664,7 +1701,7 @@ if (require.main === module && process.argv[2] === '--fetch') {
     process.stdin.on('end', () => {
         let q;
         try { q = JSON.parse(input); } catch (e) { return out({ error: 'bad request' }); }
-        return ytRequest(q.method, q.url, q.headers, q.body, q.timeoutMs, uplinkLookup()).then(out, (e) => out({ error: e.message }));
+        return ytRequest(q.method, q.url, q.headers, q.body, q.timeoutMs, q.socks ? undefined : uplinkLookup(), q.socks || null).then(out, (e) => out({ error: e.message }));
     });
 } else if (require.main === module) {
     const d = new Daemon();

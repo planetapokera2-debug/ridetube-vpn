@@ -12,6 +12,8 @@ audio_head {ms, bytes}: <dir>/audio.head.m4a is a complete MP4 of the audio's fi
 fetch --info <f>: the extraction extract wrote there (if fresh), not a new one: ~2.5 s less on the car.
 serve: loads yt-dlp (~1.2 s on the car), prints {"ev":"warm"}, then runs the one argv list read from stdin.
 check is the owner's self-test, run as root over ssh (it drops to the fetch uid itself).
+--proxy socks5h://host:port (RideTube VPN): yt-dlp and the audio's Range requests go through that SOCKS5 proxy, which
+resolves the names (the car has neither NAT nor TUN: a VPN on it can only offer a local proxy).
 """
 import argparse
 import copy
@@ -28,6 +30,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from fractions import Fraction
 
@@ -173,6 +176,59 @@ def install_dns(lease):
     getaddrinfo._lease = lease
     socket.getaddrinfo = getaddrinfo
     return servers
+
+
+# ---------------------------------------------------------------- SOCKS5 (RideTube VPN)
+
+SOCKS_REP = {1: 'general failure', 2: 'not allowed', 3: 'network unreachable', 4: 'host unreachable',
+             5: 'connection refused', 6: 'TTL expired', 7: 'command not supported', 8: 'address type not supported'}
+
+
+def _recv(s, n):
+    b = b''
+    while len(b) < n:
+        c = s.recv(n - len(b))
+        if not c:
+            raise OSError('socks: the proxy closed the connection')
+        b += c
+    return b
+
+
+def socks_connect(proxy, host, port, timeout=None):
+    """A TCP connection to host:port through the SOCKS5 proxy (socks5h://host:port): CONNECT by name, no auth."""
+    u = urllib.parse.urlsplit(proxy)
+    s = socket.create_connection((u.hostname, u.port), timeout=timeout)
+    try:
+        s.sendall(b'\x05\x01\x00')
+        if _recv(s, 2) != b'\x05\x00':
+            raise OSError('socks: the proxy wants a password or is not SOCKS5')
+        name = host.encode('idna')
+        s.sendall(b'\x05\x01\x00\x03' + bytes([len(name)]) + name + struct.pack('>H', int(port)))
+        r = _recv(s, 4)
+        if r[1] != 0:
+            raise OSError(f'socks: {SOCKS_REP.get(r[1], r[1])}')
+        n = {1: 4, 4: 16}.get(r[3])
+        if n is None:
+            n = _recv(s, 1)[0]
+        _recv(s, n + 2)
+        return s
+    except BaseException:
+        s.close()
+        raise
+
+
+def socks_opener(proxy, ctx):
+    """A urllib opener whose https requests go through the SOCKS5 proxy (PySocks is not on the car)."""
+    class Conn(http.client.HTTPSConnection):
+        def connect(self):
+            t = self.timeout if isinstance(self.timeout, (int, float)) else None
+            self.sock = self._context.wrap_socket(socks_connect(proxy, self.host, self.port, t), server_hostname=self.host)
+
+    class Handler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(Conn, req, context=ctx)
+
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), Handler(context=ctx))  # no other proxy on top
 
 
 # ---------------------------------------------------------------- MP4 boxes
@@ -394,7 +450,7 @@ def flatten_m4a(src, dst, limit=None):
 
 
 def ranged_get(url, headers, dst, total, on_chunk=None, conns=AUDIO_CONNS, first=AUDIO_FIRST, chunk=AUDIO_CHUNK,
-               ctx=None, timeout=15, gate=None):
+               ctx=None, timeout=15, gate=None, opener=None):
     """total bytes of url into dst with conns parallel Range requests, handed out in file order; with gate (an Event)
     only the first connection runs until it is set.
     on_chunk(prefix, done): after each chunk, under a lock; prefix = the bytes written from 0 without a gap."""
@@ -409,7 +465,7 @@ def ranged_get(url, headers, dst, total, on_chunk=None, conns=AUDIO_CONNS, first
         for attempt in range(3):
             try:
                 req = urllib.request.Request(url, headers=dict(headers, Range=f'bytes={s}-{e - 1}'))
-                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+                with (opener.open(req, timeout=timeout) if opener else urllib.request.urlopen(req, timeout=timeout, context=ctx)) as r:
                     if r.status != 206:
                         raise OSError(f'HTTP {r.status} to a Range request')
                     pos = s
@@ -659,12 +715,15 @@ def no_captions(yt_dlp):
 
 
 def ydl_params(a, fmt, hook=None):
-    return {'format': fmt, 'cachedir': a.cache_dir, 'logger': _Log(), 'quiet': True, 'noprogress': True,
-            'no_warnings': True, 'noplaylist': True, 'fixup': 'never', 'concurrent_fragment_downloads': 4,
-            # the API's default is no retry: one 20 s stall (googlevideo pacing) ended the video; a retry resumes it
-            'retries': 10, 'socket_timeout': 30,
-            'js_runtimes': {'node': {'path': a.node}}, 'remote_components': [],
-            'progress_hooks': [hook] if hook else []}
+    p = {'format': fmt, 'cachedir': a.cache_dir, 'logger': _Log(), 'quiet': True, 'noprogress': True,
+         'no_warnings': True, 'noplaylist': True, 'fixup': 'never', 'concurrent_fragment_downloads': 4,
+         # the API's default is no retry: one 20 s stall (googlevideo pacing) ended the video; a retry resumes it
+         'retries': 10, 'socket_timeout': 30,
+         'js_runtimes': {'node': {'path': a.node}}, 'remote_components': [],
+         'progress_hooks': [hook] if hook else []}
+    if getattr(a, 'proxy', None):
+        p['proxy'] = a.proxy  # RideTube VPN: socks5h - the proxy resolves the names
+    return p
 
 
 # visionos: avc1 https + AAC 140, no PO token, no JS solve, no tv_samsung ad wait (5 s); measured 2026-11-03
@@ -766,7 +825,7 @@ def audio_ranged(a, ya, info, meta):
     ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
     try:
         ranged_get(f['url'], f.get('http_headers') or {}, src, total, on_chunk, conns=AUDIO_CONNS, first=AUDIO_FIRST,
-                   chunk=AUDIO_CHUNK, ctx=ctx, gate=gate)
+                   chunk=AUDIO_CHUNK, ctx=ctx, gate=gate, opener=socks_opener(a.proxy, ctx) if getattr(a, 'proxy', None) else None)
     except BaseException:
         os.remove(src)  # yt-dlp's fallback would take this holed file for a finished download (continuedl)
         raise
@@ -907,8 +966,9 @@ def check(a):
         import ssl
         import urllib.request
         ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
-        with urllib.request.urlopen('https://www.youtube.com/robots.txt', context=ctx, timeout=10) as r:
-            line('tls robots.txt', r.status == 200, t, f'HTTP {r.status} {len(r.read())} B')
+        get = socks_opener(a.proxy, ctx).open if a.proxy else (lambda u, timeout: urllib.request.urlopen(u, context=ctx, timeout=timeout))
+        with get('https://www.youtube.com/robots.txt', timeout=10) as r:
+            line('tls robots.txt' + (' via ' + a.proxy if a.proxy else ''), r.status == 200, t, f'HTTP {r.status} {len(r.read())} B')
     except Exception as e:  # noqa: BLE001
         line('tls robots.txt', False, t, e)
     t = time.monotonic()
@@ -932,7 +992,8 @@ def check(a):
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out)
     cmd = [sys.executable, '-I', os.path.abspath(__file__), 'fetch', vid, out, '--cache-dir', cache,
-           '--height', str(a.height), '--node', a.node, '--lease', a.lease] + (['--pyz', a.pyz] if a.pyz else [])
+           '--height', str(a.height), '--node', a.node, '--lease', a.lease] + (['--pyz', a.pyz] if a.pyz else []) + \
+        (['--proxy', a.proxy] if a.proxy else [])
     t = time.monotonic()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env={}, cwd='/')
     t_audio = t_head = t_lead = t_dl = None  # t_dl: first progress event, after yt-dlp's 'sleep as required by the site'
@@ -996,6 +1057,7 @@ def main(argv=None):
     ap.add_argument('--pyz')
     ap.add_argument('--uid', type=int)
     ap.add_argument('--info')
+    ap.add_argument('--proxy')
     a = ap.parse_args(argv)
     if a.cmd == 'check':
         return check(a)

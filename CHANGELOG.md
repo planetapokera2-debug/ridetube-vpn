@@ -1,5 +1,13 @@
 # Changelog
 
+## Service 0.3.9 + VPN (modified version)
+
+- YouTube through a VPN on the car: while a SOCKS5 proxy listens on `127.0.0.1:1065` (bmw-vpn, jap-wireproxy), the
+  fetch helper, thumbnails and yt-dlp (with the audio's Range requests) go through it, the names resolved by the
+  proxy; nothing listening: directly. Checked through a real Hysteria2 tunnel: InnerTube search and robots.txt on
+  Node 8.16.2, a thumbnail on Node 22, yt-dlp extract and a full fetch on Python 3.12 (stream URLs bound to the
+  tunnel's address).
+
 ## Service 0.3.9
 
 - Videos play again: each video's folder was 0700, so BMW's media engine (its own uid) could not open the audio

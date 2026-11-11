@@ -141,6 +141,23 @@ It is written to `state/internet-uids` (component.json `"internet": true, "uids"
 while the uplink is installed, straight into that drop-in (the uplink rescans every 5 s). The unit
 starts node with `--max-http-header-size=65536`: the TV page's headers pass 8 kB.
 
+### Internet: a VPN through a local SOCKS5 proxy (RideTube VPN)
+
+The head unit's kernel has neither NAT nor a TUN device, so a VPN on the car (bmw-vpn: Hysteria2;
+jap-wireproxy: WireGuard) can only offer a SOCKS5 proxy on `127.0.0.1`, and only a program that asks goes
+through it. The daemon probes `opts.socks` (`127.0.0.1:1065`, the port bmw-vpn and jap-wireproxy listen on;
+`MGU_YT_SOCKS` overrides it in the unit, `''` turns it off) at start and every 5 s. While something listens there,
+every request goes through it, CONNECT by name (the proxy resolves the names, the car's DNS is not asked):
+
+- the fetch helper (`ytd.js --fetch`: InnerTube, sign-in, feeds, SponsorBlock) gets `socks` in its stdin request;
+- `thumb.js` gets `--socks host:port`;
+- `ytfetch.py` gets `--proxy socks5h://host:port` (yt-dlp's own `proxy`, and the audio's Range requests through a
+  small SOCKS5 opener: PySocks is not on the car). A prefetched stream lookup is kept per route
+  (`info/<id>.vpn.json` through the proxy): its URLs are bound to the address that asked.
+
+Nothing listening: directly, as before. A proxy that listens but whose tunnel is down is not detected: requests
+fail as they would directly where YouTube is blocked.
+
 ## Rules
 
 - Every exit path releases audio (STOP + `disconnect`): stop, end of file, playback error, app
@@ -176,6 +193,7 @@ starts node with `--max-http-header-size=65536`: the TV page's headers pass 8 kB
 ## Build and test
 
     node test/test_ytd.js           # fake someip, fake ytdec, fake fetcher, fake youtube.com
+    node test/test_socks.js         # RideTube VPN: a fake SOCKS5 proxy (NODE8=<node 8 binary> also checks the daemon's Node)
     node test/test_thumb.js         # Node 22+: ffmpeg-made JPEGs (baseline, resampled, progressive via jpegtran); online part skipped offline
     python3.12 -I test/test_ytfetch.py   # ffmpeg fixtures, local Range server (head MP4, ranged == one stream); online part skipped offline
     MGU_STORE=... ./build.sh [path/to/ytdec]   # → dist/jap-ridetube-d@<version>.tgz (default ../ytdec/build/target/ytdec)

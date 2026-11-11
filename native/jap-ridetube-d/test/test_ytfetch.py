@@ -338,6 +338,122 @@ class Dns(unittest.TestCase):
         self.assertIs(socket.getaddrinfo, self.orig)
 
 
+class _Socks5(threading.Thread):
+    """A SOCKS5 proxy (no auth, CONNECT): every name goes to one local server; refuse=True answers 5 instead."""
+    def __init__(self, target):
+        super().__init__(daemon=True)
+        self.target, self.seen, self.refuse = target, [], False
+        self.sock = socket.socket()
+        self.sock.bind(('127.0.0.1', 0))
+        self.sock.listen(16)
+        self.url = f'socks5h://127.0.0.1:{self.sock.getsockname()[1]}'
+
+    def run(self):
+        while True:
+            try:
+                c, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.serve, args=(c,), daemon=True).start()
+
+    def serve(self, c):
+        try:
+            n = ytfetch._recv(c, 2)[1]
+            ytfetch._recv(c, n)
+            c.sendall(b'\x05\x00')
+            _v, _cmd, _r, atyp = ytfetch._recv(c, 4)
+            host = ytfetch._recv(c, ytfetch._recv(c, 1)[0]).decode() if atyp == 3 else socket.inet_ntoa(ytfetch._recv(c, 4))
+            port = int.from_bytes(ytfetch._recv(c, 2), 'big')
+            self.seen.append((atyp, host, port))
+            if self.refuse:
+                c.sendall(b'\x05\x05\x00\x01' + bytes(6))
+                return c.close()
+            up = socket.create_connection(self.target)
+            c.sendall(b'\x05\x00\x00\x01' + bytes(6))
+            for a, b in ((c, up), (up, c)):
+                threading.Thread(target=self.pipe, args=(a, b), daemon=True).start()
+        except OSError:
+            c.close()
+
+    @staticmethod
+    def pipe(a, b):
+        try:
+            while True:
+                d = a.recv(65536)
+                if not d:
+                    break
+                b.sendall(d)
+        except OSError:
+            pass
+        finally:
+            for x in (a, b):
+                try:
+                    x.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+
+class Socks(unittest.TestCase):
+    """RideTube VPN: the audio's Range requests and yt-dlp go through a local SOCKS5 proxy, names resolved by it."""
+    @classmethod
+    def setUpClass(cls):
+        import ssl
+        cls.tmp = tempfile.mkdtemp(dir=TMP)
+        key, cls.cert = os.path.join(cls.tmp, 'k.pem'), os.path.join(cls.tmp, 'c.pem')
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cls.cert, '-days', '2',
+                        '-subj', '/CN=media.example', '-addext', 'subjectAltName=DNS:media.example'], check=True, capture_output=True)
+        cls.data = os.urandom(300000)
+        cls.srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), _Ranges)
+        cls.srv.data, cls.srv.seen, cls.srv.ranges = cls.data, [], True
+        sc = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        sc.load_cert_chain(cls.cert, key)
+        cls.srv.socket = sc.wrap_socket(cls.srv.socket, server_side=True)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.proxy = _Socks5(cls.srv.server_address)
+        cls.proxy.start()
+        cls.ctx = ssl.create_default_context(cafile=cls.cert)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.proxy.sock.close()
+        shutil.rmtree(cls.tmp)
+
+    def setUp(self):
+        self.orig, self.proxy.seen[:] = socket.getaddrinfo, []
+
+        def no_dns(host, *a, **kw):  # the car resolves nothing itself on this path: the proxy does
+            if host == 'media.example':
+                raise socket.gaierror(socket.EAI_NONAME, 'asked the car for ' + host)
+            return self.orig(host, *a, **kw)
+        socket.getaddrinfo = no_dns
+
+    def tearDown(self):
+        socket.getaddrinfo = self.orig
+        self.proxy.refuse = False
+
+    def test_ranged_get_through_the_proxy_by_name(self):
+        out = os.path.join(self.tmp, 'got.m4a')
+        ytfetch.ranged_get('https://media.example/a', {'User-Agent': 'UA-2'}, out, len(self.data), conns=3, first=50000, chunk=70000,
+                           opener=ytfetch.socks_opener(self.proxy.url, self.ctx))
+        with open(out, 'rb') as f:
+            self.assertEqual(f.read(), self.data)
+        self.assertTrue(self.proxy.seen)
+        self.assertEqual(set(self.proxy.seen), {(3, 'media.example', 443)})
+
+    def test_refused_is_an_error(self):
+        self.proxy.refuse = True
+        with self.assertRaisesRegex(OSError, 'socks: connection refused'):
+            ytfetch.socks_connect(self.proxy.url, 'media.example', 443, 5)
+
+    def test_proxy_reaches_ytdlp(self):
+        class A:
+            cache_dir, node, proxy = '/c', '/n', None
+        self.assertNotIn('proxy', ytfetch.ydl_params(A(), None))
+        A.proxy = 'socks5h://127.0.0.1:1065'
+        self.assertEqual(ytfetch.ydl_params(A(), None)['proxy'], 'socks5h://127.0.0.1:1065')
+
+
 class NoCaptions(unittest.TestCase):
     def test_initial_extract_loses_captions(self):
         import types

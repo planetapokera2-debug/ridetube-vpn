@@ -15,6 +15,7 @@ sh "$here/tools/build_pyz.sh" "$py"
 [ -f "$here/vendor/jpeg-js/decoder.js" ] || sh "$here/tools/vendor_jpeg.sh"
 node "$here/test/test_ytd.js" >/dev/null
 node "$here/test/test_thumb.js" >/dev/null
+node "$here/test/test_socks.js" >/dev/null
 "$py" -I "$here/test/test_ytfetch.py"
 cp "$ytdec" "$here/build/ytdec"
 node "$MGU_STORE/deploy/hu" artifact "$here" --out "$here/dist"

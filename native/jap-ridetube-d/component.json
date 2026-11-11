@@ -39,6 +39,11 @@
       "mode": "0644"
     },
     {
+      "path": "socks.js",
+      "from": "socks.js",
+      "mode": "0644"
+    },
+    {
       "path": "thumb.js",
       "from": "thumb.js",
       "mode": "0644"

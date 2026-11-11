@@ -1,4 +1,13 @@
-# RideTube
+# RideTube (VPN build)
+
+> **This is a modified version** of [JustAnotherPU/ridetube](https://github.com/JustAnotherPU/ridetube) (GPL-3.0-or-later).
+> Changed: the service goes to YouTube through a local SOCKS5 proxy on `127.0.0.1:1065` while one listens there
+> (a VPN on the car, e.g. the `bmw-vpn` tool or `jap-wireproxy`), and directly otherwise. The head unit has neither
+> NAT nor TUN, so a VPN cannot redirect RideTube from the outside. Files: `native/jap-ridetube-d/socks.js` (new),
+> `ytd.js`, `thumb.js`, `ytfetch.py`, their tests (`test/test_socks.js`, `test/test_ytfetch.py` class `Socks`),
+> READMEs, `build.sh`. See `native/jap-ridetube-d/README.md`, "Internet: a VPN through a local SOCKS5 proxy".
+> Изменённая версия RideTube: YouTube через VPN машины (SOCKS5 127.0.0.1:1065), без VPN - напрямую.
+
 
 > **Experimental and unofficial.** RideTube is an unofficial client for YouTube. It is not affiliated with,
 > endorsed by or sponsored by Google or YouTube. Use it at your own risk. You are responsible for following
@@ -106,7 +115,8 @@ One car only so far. Reports from other cars are welcome in the issues.
 ```sh
 node kit/tools/test_runtime.js && node kit/tools/test_life.js && node kit/tools/test_parked.js \
   && node kit/tools/test_qr.js
-(cd native/jap-ridetube-d && node test/test_ytd.js && node test/test_thumb.js && python3.12 -I test/test_ytfetch.py)
+(cd native/jap-ridetube-d && node test/test_ytd.js && node test/test_thumb.js && node test/test_socks.js \
+  && python3.12 -I test/test_ytfetch.py)
 (cd native/ytdec && make test && make target)     # make target needs Docker
 ```
 

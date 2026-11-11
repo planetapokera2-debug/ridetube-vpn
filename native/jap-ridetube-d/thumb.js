@@ -1,8 +1,10 @@
 'use strict';
-// node22 thumb.js <id> [--lease <path>]: i.ytimg.com's mqdefault.jpg as 320x180 RGBA (230400 bytes) on stdout.
+// node22 thumb.js <id> [--lease <path>] [--socks host:port]: i.ytimg.com's mqdefault.jpg as 320x180 RGBA (230400 bytes)
+// on stdout; with --socks through that SOCKS5 proxy (RideTube VPN), the name resolved by the proxy.
 // Runs as the fetch uid (env {}, cwd /); the car has no image library, so the JPEG is decoded here.
 const https = require('https');
 const decode = require('./vendor/jpeg-js/decoder.js');
+const socks = require('./socks');
 
 const W = 320, H = 180, MAX = 2 * 1024 * 1024, TIMEOUT_MS = 8000;
 
@@ -19,9 +21,19 @@ function uplinkLookup(leaseFile) {
     };
 }
 
-function fetchJpeg(id, lookup) {
+function fetchJpeg(id, lookup, proxy) {
+    if (proxy) {
+        return socks.connectTls(proxy, 'i.ytimg.com', 443, TIMEOUT_MS).then((sock) => {
+            const agent = new https.Agent({ keepAlive: false });
+            agent.createConnection = () => sock;
+            return fetchJpegVia(id, { agent }).finally(() => sock.destroy());
+        });
+    }
+    return fetchJpegVia(id, { lookup });
+}
+function fetchJpegVia(id, via) {
     return new Promise((resolve, reject) => {
-        const req = https.request({ host: 'i.ytimg.com', path: '/vi/' + id + '/mqdefault.jpg', lookup, headers: { 'user-agent': 'Mozilla/5.0' } }, (res) => {
+        const req = https.request(Object.assign({ host: 'i.ytimg.com', path: '/vi/' + id + '/mqdefault.jpg', headers: { 'user-agent': 'Mozilla/5.0' } }, via), (res) => {
             // 404 is YouTube's placeholder for private/removed videos; redirects are not followed
             if (res.statusCode !== 200) { res.resume(); return reject(new Error('http ' + res.statusCode)); }
             const parts = [];
@@ -51,16 +63,18 @@ function thumbRgba(jpeg) {
     return out;
 }
 
-module.exports = { thumbRgba, uplinkLookup };
+module.exports = { thumbRgba, uplinkLookup, fetchJpeg };
 
 if (require.main === module) {
     const fail = (m) => { process.stderr.write('thumb: ' + m + '\n'); process.exit(1); };
     const a = process.argv.slice(2);
     const id = a[0];
-    const li = a.indexOf('--lease');
+    const li = a.indexOf('--lease'), si = a.indexOf('--socks');
     if (!/^[A-Za-z0-9_-]{11}$/.test(id || '')) fail('bad id');
     if (li > 0 && !a[li + 1]) fail('--lease needs a path');
-    fetchJpeg(id, uplinkLookup(li > 0 ? a[li + 1] : undefined))
+    if (si > 0 && !socks.parse(a[si + 1])) fail('--socks needs host:port');
+    const proxy = si > 0 ? a[si + 1] : null;
+    fetchJpeg(id, proxy ? undefined : uplinkLookup(li > 0 ? a[li + 1] : undefined), proxy)
         .then((jpeg) => { const b = thumbRgba(jpeg); process.stdout.write(b, () => process.exit(0)); })
         .catch((e) => fail(e.message));
 }
