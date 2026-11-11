@@ -52,8 +52,9 @@ def artifact(path, base):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--base', default='https://github.com/%s/releases/download/catalog/' % REPO)
-    # VPN build: the app is unchanged - its package as JustAnotherPU published it (already without oap-sdk), so no
-    # BMW oap-sdk is needed here; the source: https://github.com/JustAnotherPU/ridetube/releases/tag/catalog
+    # VPN build: the app is JustAnotherPU's published package (already without oap-sdk, so no BMW oap-sdk is needed
+    # here; https://github.com/JustAnotherPU/ridetube/releases/tag/catalog) with kit/runtime/fonts.js, the Cyrillic
+    # atlases and the app.json changes patched in (0.3.9: tools/patch_app.py)
     ap.add_argument('--app-package', help='a published app package (jap_ridetube@<version>.tgz) used as it is')
     a = ap.parse_args()
     mtime = int(os.environ.get('SOURCE_DATE_EPOCH', '0'))

@@ -1,5 +1,14 @@
 # Changelog
 
+## App 0.3.9 (VPN build, modified version)
+
+- Russian titles: the published app is the English build and drew Cyrillic as nothing (only the punctuation and
+  digits showed). Cyrillic atlases baked from the same Ubuntu font (regular and bold), and fonts.js picks the bold
+  one for bold text.
+- The 12 V battery pause is off by default ("Never"): a parked car with the engine running reported a charging
+  condition under 65 % and the video kept pausing. It can still be switched on in the settings.
+- Built by tools/patch_app.py from JustAnotherPU's published 0.3.8 package.
+
 ## Service 0.3.9 + VPN (modified version)
 
 - YouTube through a VPN on the car: while a SOCKS5 proxy listens on `127.0.0.1:1065` (bmw-vpn, jap-wireproxy), the
