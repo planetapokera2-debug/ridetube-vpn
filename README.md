@@ -1,5 +1,30 @@
 # RideTube (VPN build)
 
+## По-русски: установка
+
+RideTube, который ходит в YouTube через VPN машины. На голове BMW нет ни NAT, ни TUN, поэтому VPN не может
+незаметно для программы завернуть её в туннель: RideTube сам отправляет запросы через SOCKS5-прокси службы
+**bmw-vpn** (`127.0.0.1:1065`). Если прокси не слушает (служба не стоит или VPN выключен), RideTube ходит напрямую,
+как оригинал. Это изменённая версия [JustAnotherPU/ridetube](https://github.com/JustAnotherPU/ridetube) (GPL-3.0);
+приложение то же (пакет автора без изменений), изменена только служба `jap-ridetube-d` (0.3.10).
+
+Нужно: служба VPN — источник `planetapokera2-debug/bmw-vpn` в Store, «Служба VPN» установлена и работает.
+
+**Если RideTube от автора уже стоит** (вход в аккаунт и настройки сохранятся):
+1. MGU Store → источники → **удалить** источник `JustAnotherPU/ridetube`. Само приложение RideTube и его службу
+   **не удалять**: удаление службы стирает `/var/opt/jap-ridetube-d` целиком, вместе со входом в аккаунт.
+2. Добавить источник `planetapokera2-debug/ridetube-vpn`, канал **Releases**.
+3. **Check now** → у «RideTube service» появится обновление **0.3.10** → Update. (Store отдаёт установленное тому
+   источнику, где то же название, когда источника, из которого ставили, больше нет.)
+
+**Если RideTube ещё не стоит:** добавить источник `planetapokera2-debug/ridetube-vpn` (канал Releases) и
+`JustAnotherPU/mgu-apps:releases` (там `jap-node22`), затем Install «RideTube» — служба 0.3.10 встанет с ним.
+Источник автора `JustAnotherPU/ridetube` при этом не добавлять: с ним Store не даст поставить нашу службу
+(«already installed from …»).
+
+Проверка: в журнале службы `vpn: SOCKS5 127.0.0.1:1065 listens: YouTube through it`.
+
+
 > **This is a modified version** of [JustAnotherPU/ridetube](https://github.com/JustAnotherPU/ridetube) (GPL-3.0-or-later).
 > Changed: the service goes to YouTube through a local SOCKS5 proxy on `127.0.0.1:1065` while one listens there
 > (a VPN on the car, e.g. the `bmw-vpn` tool or `jap-wireproxy`), and directly otherwise. The head unit has neither
