@@ -281,6 +281,7 @@ async function appFrames() {
     // (the stub's ctx predates these: as kit/mgu.js)
     hu.ctx.hideButton = (id, hide) => disp.hideButton(id, hide);
     hu.ctx.onPageFocus = (fn) => { disp.onPageFocus = fn; };
+    hu.ctx.onKnob = (fn) => { disp.onKnob = fn; };
     hu.ctx.focus = (k) => disp.focusPage(k);
     hu.start();
     await until(() => d.cmds('auth_status').length, 3000, 'app connects and asks for the account');
@@ -371,11 +372,17 @@ async function appFrames() {
         disp.pageTargets.find((t) => t.key === 'ov:sbskip').run();
         await lastIs(d, { cmd: 'seek', ms: 60000 }, 'Skip jumps to its end');
         d.send({ ev: 'extras', id: 'aaa', chapters: [], segments: [] });
-        // the 12 V battery under the setting (65 %) while parked and playing: paused, with why
+        // the 12 V battery: off by default (VPN build: a running engine reads under 65 % too), so 62 % plays on
+        assert.strictEqual(hu.ctx.settings.get('battery'), '0', 'battery pause off by default');
         const nPause = d.cmds('pause').length;
         batH({ conditionBatteryChargingCondition: 62 });
+        await sleep(1500);
+        assert.strictEqual(d.cmds('pause').length, nPause, 'off: no pause at 62 %');
+        // switched on (65 %), under it while parked and playing: paused, with why
+        hu.ctx.settings.set('battery', '65');
         await until(() => d.cmds('pause').length > nPause, 2500, 'low 12 V battery pauses');
         batH({ conditionBatteryChargingCondition: 90 });
+        hu.ctx.settings.set('battery', '0');
         await hu.loopFn();
         console.log('ok   SponsorBlock Skip button (ask), 12 V battery guard');
         disp.onTap(800, 300);
@@ -607,6 +614,41 @@ async function appFrames() {
         assert.ok([...all].every(POOL) && all.size <= 56 && ids.size > 56, 'over ' + ids.size + ' videos drawn, ' + all.size + ' picture ids reused: ' + [...all].sort((a, b) => a - b));
         assert.ok(disp.pageTargets.some((x) => /^h:\d+:w1$/.test(x.key)), 'Watch later is the last shelf');
         console.log('ok   Home shelves: arrows, the controller scrolls any tile into view, the picture pool (' + all.size + ' ids)');
+        // the knob turned (VPN build): one tile a detent along a shelf, then on to the next shelf's first; back too
+        disp.onScroll(-1e6); disp._focus(null); await drawn();
+        let kc = 1000;
+        const turn = async (n) => {
+            disp._ccu({ frontRotaryEncoderOperation: kc, frontRotaryEncoderPushButton: 0, frontRotaryEncoderDeflection: 0 });
+            kc += n;
+            disp._ccu({ frontRotaryEncoderOperation: kc, frontRotaryEncoderPushButton: 0, frontRotaryEncoderDeflection: 0 });
+            await drawn(); await serve(); await drawn();
+        };
+        const onTile = (key) => {
+            assert.strictEqual(disp.focusKey, 'tgt:' + key, 'the knob on ' + key);
+            const t = disp.pageTargets.find((x) => x.key === key);
+            assert.ok(t && inView(t), key + ' in view: ' + JSON.stringify(t));
+        };
+        // from nowhere: the first tile shown (Shelf 0 is still turned to its end by the walk above)
+        await turn(1);
+        const first = /^tgt:h:0:h0_(\d+)$/.exec(disp.focusKey);
+        assert.ok(first, 'the first turn onto Shelf 0: ' + disp.focusKey);
+        onTile('h:0:h0_' + first[1]);
+        await turn(-Number(first[1])); onTile('h:0:h0_0');
+        for (let i = 1; i < N; i++) { await turn(1); onTile('h:0:h0_' + i); }
+        await turn(1); onTile('h:1:h1_0');
+        await turn(-1); onTile('h:0:h0_11');
+        await turn(3); onTile('h:1:h1_2');
+        // pushed left onto the rail, then turned: back on the tile it was on
+        disp._focus({ k: 'tgt:rail:home', tgt: at(/^rail:home$/) });
+        await turn(1); onTile('h:1:h1_2');
+        await turn(-2); onTile('h:1:h1_0');
+        const plays = d.cmds('play').length;
+        disp._ccu({ frontRotaryEncoderOperation: kc, frontRotaryEncoderPushButton: 1, frontRotaryEncoderDeflection: 0 });
+        await until(() => d.cmds('play').length > plays, 2000, 'a press on the tile the knob is on plays it');
+        assert.strictEqual(d.cmds('play').slice(-1)[0].id, 'h1_0');
+        disp._ccu({ frontRotaryEncoderOperation: kc, frontRotaryEncoderPushButton: 0, frontRotaryEncoderDeflection: 0 });
+        disp.onBack(false); await drawn();
+        console.log('ok   the knob turns through the tiles one by one (shelf, next shelf, back), a press plays');
         // the rail: Subscriptions
         at(/^rail:subs$/).run();
         await until(() => d.cmds('feed').slice(-1)[0].which === 'subs', 2000, 'the rail opens Subscriptions');

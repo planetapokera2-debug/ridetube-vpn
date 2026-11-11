@@ -579,15 +579,47 @@ mgu.run({
             if (vid) dwell = setTimeout(() => { if (focusKey === key) model.prefetch(vid[1]); }, 1000);
             if (key && key.indexOf('ov:') === 0) { wake(); return; }      // the controller in the player: its overlay
             const w = key && laid.mode === mode && laid.where[key];
-            if (!w) return;
-            const st = vs(mode), row = laid.rows[w.ri];
+            if (w) reveal(w.ri, w.i);
+        });
+        // tile i of row ri into view: its shelf turned, the page scrolled
+        function reveal(ri, i) {
+            const st = vs(mode), row = laid.rows[ri];
             if (row.hs) {
-                const off = st.off[w.ri] || 0;
-                if (w.i < off) st.off[w.ri] = w.i; else if (w.i > off + PER_ROW - 1) st.off[w.ri] = w.i - PER_ROW + 1;
+                const off = st.off[ri] || 0;
+                if (i < off) st.off[ri] = i; else if (i > off + PER_ROW - 1) st.off[ri] = i - PER_ROW + 1;
             }
             const top = row.y - 8, bot = row.y + row.h;
             if (top < st.sy) st.sy = Math.max(0, top); else if (bot > st.sy + laid.viewH) st.sy = Math.min(st.max, bot - laid.viewH);
             dirty = true;
+        }
+        // the knob turned on a page of tiles: one tile a detent, along a shelf, then on to the next row's first
+        // (back: the previous row's last); from nowhere (or the rail, a shelf's arrow) back onto the tile it was
+        // on last on this page, else the first tile shown
+        const knobLast = {};
+        if (ctx.onKnob) ctx.onKnob((d, key) => {
+            if (!browsing() || laid.mode !== mode || !laid.rows.length) return null;
+            const letter = mode[0], rows = laid.rows, st = vs(mode), tile = (k) => /^[a-z]+:\d+:/.test(k || '') && !/:[<>]$/.test(k);
+            const w = tile(key) && laid.where[key], last = knobLast[mode];
+            let ri, i;
+            if (!w && last && laid.where[last] && rows[laid.where[last].ri]) {
+                ri = laid.where[last].ri; i = laid.where[last].i;
+            } else if (!w || !rows[w.ri]) {
+                ri = rows.findIndex((r) => r.y + r.h > st.sy + 8);
+                if (ri < 0) ri = 0;
+                i = rows[ri].hs ? st.off[ri] || 0 : 0;
+            } else {
+                ri = w.ri; i = w.i + d;
+                while (i >= rows[ri].items.length && ri < rows.length - 1) { i -= rows[ri].items.length; ri++; }
+                while (i < 0 && ri > 0) { ri--; i += rows[ri].items.length; }
+                i = Math.max(0, Math.min(rows[ri].items.length - 1, i));
+            }
+            const r = rows[ri].items[i];
+            if (!r) return null;
+            const next = letter + ':' + ri + ':' + r.id;
+            laid.where[next] = { ri, i };
+            knobLast[mode] = next;
+            reveal(ri, i);
+            return next;
         });
         if (ctx.onScroll) ctx.onScroll((dy) => {
             if (!browsing()) return false;

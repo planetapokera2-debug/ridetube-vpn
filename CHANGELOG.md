@@ -1,5 +1,12 @@
 # Changelog
 
+## App 0.3.10 (VPN build, modified version)
+
+- The controller's knob turns through the videos one by one: along a shelf, then on to the next shelf's first
+  (turned back: the previous one's last), each brought into view. Before, turning scrolled the page and only a
+  push moved between the videos. From the rail (pushed left) a turn goes back to the video it was on. The kit
+  gets ctx.onKnob for it; the player, the sheets and the HMI menu keep the kit's ring.
+
 ## App 0.3.9 (VPN build, modified version)
 
 - Russian titles: the published app is the English build and drew Cyrillic as nothing (only the punctuation and

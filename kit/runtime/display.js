@@ -348,6 +348,13 @@ class Display {
             if (to) { this._focus(to); this._repaint(); } else if (tilt === 'W' && !this._edgeBack()) this._back();
             return;
         }
+        // the app's own steps for the knob (ctx.onKnob: a page of tiles turned through one by one), else the ring
+        if (d && this.onKnob) {
+            let key = null;
+            const at = this.focusKey && this.focusKey.indexOf('tgt:') === 0 ? this.focusKey.slice(4) : null;
+            try { key = this.onKnob(d, at); } catch (e) { this.log.error('knob', e); }
+            if (key) { this.focusPage(key); return; }
+        }
         // one row of places for the knob: the header's tabs, the page's buttons and rows, the bar
         const ring = this._ring();
         let i = ring.findIndex((p) => p.k === this.focusKey);

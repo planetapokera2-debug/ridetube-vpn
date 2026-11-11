@@ -590,6 +590,13 @@ async function runInner(impl) {
         /** onPageFocus(fn): fn(key | null) when the controller lands on the page's target key (cv.target) where the kit runs the screen: the app can scroll it into view. */
         onPageFocus(fn) { display.onPageFocus = fn; },
         /**
+         * onKnob(fn): fn(d, key | null) for each turn of the controller's knob where the kit runs the screen and no sheet
+         * is open (d detents, + = clockwise; key: the page's target the controller is on): the app steps the controller
+         * itself and returns the target key to go onto (brought into view by the app; kept while the next frames draw
+         * it), or null for the kit's own ring (the header, a scrolling page, the targets, the bar).
+         */
+        onKnob(fn) { display.onKnob = fn; },
+        /**
          * onScroll(fn): fn(dy) scrolls a page drawn with cv.scroll = true by dy px (+ = further down), from a
          * finger dragged on it or the controller turned while on it; returns false when already at that end.
          * cv.scroll = { y, bar: { x, y, w, h } } for a list on the page (from y down) with its scroll bar: the

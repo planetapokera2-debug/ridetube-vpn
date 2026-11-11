@@ -39,7 +39,14 @@ def main():
         if s.get('key') in defaults:
             s['default'] = defaults[s['key']]
     put('package/javascript/kit/app-spec.json', json.dumps(spec, indent=1).encode('utf-8'))
-    put('package/javascript/kit/fonts.js', open(os.path.join(ROOT, 'kit', 'runtime', 'fonts.js'), 'rb').read())
+    # the app's and the kit's code from this repository (identical to the published 0.3.8 but for the VPN build's changes)
+    kr = os.path.join(ROOT, 'kit', 'runtime')
+    for f in sorted(os.listdir(kr)):
+        if f.endswith('.js'):
+            assert 'package/javascript/kit/' + f in members, f
+            put('package/javascript/kit/' + f, open(os.path.join(kr, f), 'rb').read())
+    for f, to in (('main.js', 'app.js'), ('yt.js', 'yt.js'), ('speller.js', 'speller.js')):
+        put('package/javascript/' + to, open(os.path.join(ROOT, 'apps', 'jap_ridetube', f), 'rb').read())
     for f in ('cyrillic.json', 'cyrillic-bold.json'):
         put('package/javascript/kit/fonts/' + f, open(os.path.join(FONTS, f), 'rb').read())
 
