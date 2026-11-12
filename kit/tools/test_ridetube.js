@@ -335,6 +335,18 @@ async function appFrames() {
     await sleep(100);
     assert.strictEqual(d.cmds('thumb').length, 0, 'no tiles, no thumbs');
     assert.strictEqual(d.cmds('library').length, 0, 'no library asked');
+    // an app updated without its service: a line on the page says which one to update (state events say the version, 0.3.13 on)
+    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.13';
+    d.send({ ev: 'state', state: 'idle' });
+    await sleep(100); said.length = 0; await hu.loopFn();
+    assert.ok(said.indexOf(OLDS) >= 0, 'an older service: ' + said.join('|'));
+    d.send({ ev: 'state', state: 'idle', version: '0.3.12' });
+    await sleep(100); said.length = 0; await hu.loopFn();
+    assert.ok(said.some((x) => /: 0\.3\.12 on the car, this app needs 0\.3\.13$/.test(x)), '0.3.12: ' + said.join('|'));
+    d.send({ ev: 'state', state: 'idle', version: '0.3.13' });
+    await sleep(100); said.length = 0; await hu.loopFn();
+    assert.ok(!said.some((x) => /Update the RideTube service/.test(x)), 'the one it needs: no line');
+    console.log('ok   an older service (or one that does not say its version): the page says to update it');
     // recent search -> results with a 320x180 thumb
     hu.handlers.BTN_S1();
     await until(() => d.cmds('search').length, 2000, 'search');
@@ -864,6 +876,55 @@ function extrasModel() {
     console.log('ok   extras: Continue watching, positions, chapters, the skipped toast');
 }
 
+// VPN build: the Store installs an update afresh (data/ empty); the kit's settings keep a copy with bmw-vpn (1.1.4 on)
+function settingsKeep() {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'runtime', 'mgu.js'), 'utf8');
+    const cut = src.match(/class Settings[\s\S]*?\n}\n/)[0];
+    const lg = { info() {}, warn() {}, error() {} };
+    const mk = (dataDir) => new Function('fs', 'path', 'DATA_DIR', 'log', cut + '\nreturn Settings;')(fs, path, dataDir, lg);
+    const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'apps', 'jap_ridetube', 'app.json'), 'utf8')).settings;
+    const q = schema.find((x) => x.key === 'quality');
+    assert.ok(q && q.options && q.options.length > 1, 'a quality setting to keep');
+    const other = q.options.map((o) => o[0]).find((v) => v !== q.default);
+    const t = tmp('yt-keep-'), ctl = path.join(t, 'ctl'), pub = path.join(t, 'pub');
+    fs.mkdirSync(ctl); fs.mkdirSync(pub);
+    const keep = { id: 'jap_ridetube', ctl, pub }, kf = path.join(ctl, 'keep-jap_ridetube@' + process.getuid() + '.json');
+    const d1 = path.join(t, 'oap_1'); fs.mkdirSync(d1);
+    const a = new (mk(d1))(schema, keep);
+    a.set('quality', other);
+    const k = JSON.parse(fs.readFileSync(kf, 'utf8'));
+    assert.strictEqual(k.quality, other, 'the copy for the service');
+    assert.strictEqual(fs.statSync(kf).mode & 0o777, 0o644, 'readable by the service');
+    fs.writeFileSync(path.join(pub, 'jap_ridetube.json'), fs.readFileSync(kf)); fs.unlinkSync(kf);   // (the service's keep_sync)
+    const d2 = path.join(t, 'oap_2'); fs.mkdirSync(d2);
+    const b = new (mk(d2))(schema, keep);
+    assert.ok(b.restored && b.get('quality') === other, 'an update (data/ empty): taken back');
+    schema.filter((x) => x.reset).forEach((x) => assert.strictEqual(b.get(x.key), x.default, x.key + ': its reset mark kept, so not reset again'));
+    fs.writeFileSync(path.join(pub, 'jap_ridetube.json'), JSON.stringify({ quality: q.default }));
+    const c = new (mk(d2))(schema, keep);
+    assert.ok(!c.restored && c.get('quality') === other, 'its own settings win over the copy');
+    const d3 = path.join(t, 'oap_3'); fs.mkdirSync(d3);
+    const e = new (mk(d3))(schema, { id: 'jap_ridetube', ctl: path.join(t, 'none'), pub: path.join(t, 'none') });
+    e.set('quality', other);
+    assert.strictEqual(e.get('quality'), other, 'no service: local only, as before');
+    console.log('ok   settings survive a Store update: a copy with bmw-vpn, taken back once by a fresh install');
+}
+
+function serviceVersion() {
+    const m = new Model(() => true);
+    m.setConnected(true);
+    assert.strictEqual(m.serviceOld(), null, 'not said yet: no warning');
+    m.onMsg({ ev: 'state', state: 'idle' });
+    assert.strictEqual(m.serviceOld(), 'old', 'a state event without a version: an older service');
+    [['0.3.12', '0.3.12'], ['0.3.13', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
+        m.onMsg({ ev: 'state', state: 'idle', version: v });
+        assert.strictEqual(m.serviceOld(), want, v);
+    });
+    m.setConnected(false);
+    assert.strictEqual(m.serviceOld(), null, 'not connected: the other notice');
+    console.log('ok   the service version: older than 0.3.13 (or not said) is old');
+}
+
 function channelSearch() {
     const m = new Model(() => true);
     m.auth.state = 'signed_in';
@@ -880,4 +941,4 @@ function channelSearch() {
     console.log('ok   channel search: a letter = the names starting with it, a word = the names (or handles) holding it');
 }
 
-clientAndModel().then(appFrames).then(channelSearch).then(extrasModel).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });
+clientAndModel().then(appFrames).then(channelSearch).then(extrasModel).then(settingsKeep).then(serviceVersion).then(() => process.exit(0), (e) => { console.error('FAIL', e); process.exit(1); });

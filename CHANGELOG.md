@@ -1,5 +1,15 @@
 # Changelog
 
+## App 0.3.14, service 0.3.13 (VPN build, modified version)
+
+- The settings survive a Store update: the Store installs an update afresh (an empty data/), so every update lost
+  them (the quality, the battery pause, ...). Each save also goes to the bmw-vpn service (1.1.4 on: its keep store,
+  as Радар-ассистент's), and a fresh install with no settings takes them back from there once. No bmw-vpn: local
+  only, as before. This first update still starts from the defaults (0.3.13 kept no copy).
+- The service says its version in every state event; the app updated without its service (older than 0.3.13, or one
+  that does not say it) shows "Обнови «RideTube service» в MGU Store: в машине …, нужна 0.3.13" on its pages and on
+  the HMI's main screen. Before, the new parts of playback would quietly not work.
+
 ## App 0.3.13, service 0.3.12 (VPN build, modified version)
 
 - A seek past the video fetched so far (or a link slower than the video): the sound and the picture wait together

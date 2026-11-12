@@ -1351,6 +1351,14 @@ async function main() {
         assert.strictEqual(feedItems(j)[0].watched_pct, 40); assert.strictEqual(feedItems(j)[0].start_s, 120);
     });
 
+    await t('every state event says the service version, the one in component.json (the app warns on an older service)', async () => {
+        const comp = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'component.json'), 'utf8'));
+        assert.strictEqual(require('../ytd').VERSION, comp.version);
+        c.send({ cmd: 'status' });
+        const st = await c.waitFor((x) => x.ev === 'state');
+        assert.strictEqual(st.version, comp.version);
+    });
+
     c.destroy();
     await d.close();
     console.log(results.join('\n'));

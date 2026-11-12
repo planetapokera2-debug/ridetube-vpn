@@ -109,5 +109,7 @@
  "short:Watch later": "Позже",
  "A letter, or a word": "Буква или слово",
  "Your Home, Subscriptions and Watch later, on the car": "Ваши Главная, Подписки и «Смотреть позже» - в машине",
- "Loading the video up to here: %s of %s": "Загружаю видео до этого места: %s из %s"
+ "Loading the video up to here: %s of %s": "Загружаю видео до этого места: %s из %s",
+ "Update the RideTube service in the MGU Store: %s on the car, this app needs %s": "Обнови «RideTube service» в MGU Store: в машине %s, нужна %s",
+ "an older one": "старая"
 }

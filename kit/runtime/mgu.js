@@ -83,13 +83,32 @@ process.on('exit', (code) => fileLog(code ? 'FATAL' : 'INFO', 'exit code ' + cod
 
 /* ---------------- settings (persisted in data/settings.json) ---------------- */
 class Settings {
-    constructor(schema) {
+    /**
+     * keep = { id, ctl, pub } (mgu.js: the bmw-vpn service's folders, VPN build): the Store installs an update afresh -
+     * a new oap_<uid>, its data/ empty, the settings gone. So each save also goes to the service
+     * (ctl/keep-<id>@<uid>.json; it keeps them in /var/opt/bmw-vpn/state and publishes pub/<id>.json), and an install
+     * with no settings of its own takes them from there once. No service (or one before 1.1.4): local only, as before.
+     */
+    constructor(schema, keep) {
         this.schema = schema || [];
         this.file = path.join(DATA_DIR, 'settings.json');
+        this.keep = keep && keep.id ? keep : null;
         this.values = {};
         this.listeners = [];
         for (const s of this.schema) this.values[s.key] = s.default;
-        try { Object.assign(this.values, JSON.parse(fs.readFileSync(this.file, 'utf8'))); } catch (e) {}
+        let mine = null;
+        try { mine = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch (e) {}
+        if (!mine && this.keep) {
+            try {
+                const k = JSON.parse(fs.readFileSync(path.join(this.keep.pub, this.keep.id + '.json'), 'utf8'));
+                if (k && typeof k === 'object' && !Array.isArray(k)) {
+                    mine = k; this.restored = true;
+                    try { fs.writeFileSync(this.file, JSON.stringify(k, null, 1)); } catch (e) { /* read-only */ }
+                    log.info('settings: taken back from the copy kept by bmw-vpn (an update installed the app afresh)');
+                }
+            } catch (e) { /* none kept, or no service */ }
+        }
+        if (mine) Object.assign(this.values, mine);
         // one-time move of saved settings to the new default theme (M Tricolour); later choices are kept
         const th = this.item('theme');
         if (th && this.values._themeV !== 2) {
@@ -108,11 +127,23 @@ class Settings {
             if (it.reset && this.values[mark] !== it.reset) { this.values[it.key] = it.default; this.values[mark] = it.reset; changed = true; }
         }
         if (changed && fs.existsSync(this.file)) try { fs.writeFileSync(this.file, JSON.stringify(this.values, null, 1)); } catch (e) { /* read-only */ }
+        this.keepSave();                        // (settings saved before this version: kept from now on)
+    }
+    /** a copy of the saved settings for the bmw-vpn service (see the constructor); readable by its uid (0644) */
+    keepSave() {
+        if (!this.keep || !fs.existsSync(this.file)) return;
+        try {
+            const f = path.join(this.keep.ctl, 'keep-' + this.keep.id + '@' + process.getuid() + '.json'), tmp = f + '.' + process.pid + '.tmp';
+            fs.writeFileSync(tmp, JSON.stringify(this.values), { mode: 0o644 });
+            fs.chmodSync(tmp, 0o644);
+            fs.renameSync(tmp, f);
+        } catch (e) { /* no service: local only */ }
     }
     get(key) { return this.values[key]; }
     set(key, value) {
         this.values[key] = value;
         try { fs.writeFileSync(this.file, JSON.stringify(this.values, null, 1)); } catch (e) { log.warn('settings save: ' + e); }
+        this.keepSave();
         this.listeners.forEach((fn) => { try { fn(key, value); } catch (e) { log.error(e); } });
     }
     onChange(fn) { this.listeners.push(fn); }
@@ -544,7 +575,7 @@ async function runInner(impl) {
         return;
     }
     const ui = new Ui(app);
-    const settings = new Settings(SPEC.settings);
+    const settings = new Settings(SPEC.settings, { id: SPEC.id, ctl: '/run/bmw-vpn/ctl', pub: '/run/bmw-vpn/pub/keep' });
     const display = new Display(ui, log, SPEC, settings, () => themes.theme(settings.get('theme')));
     ui.display = display;
     const ctx = {

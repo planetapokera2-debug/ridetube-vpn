@@ -82,12 +82,16 @@ class Ctl {
 }
 
 const ACTIVE = ['preparing', 'playing', 'paused'];
+// the service this app needs (VPN build: the picture's wait past the video fetched, 0.3.12; its version said, 0.3.13)
+const SERVICE_NEED = '0.3.13';
+const older = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
 
 class Model {
     /** send(obj): Ctl.send */
     constructor(send) {
         this.send = send;
         this.connected = false;
+        this.service = null;         // the service's version (its state events say it, 0.3.13 on; 'old': one before)
         this.q = null; this.searching = false;
         this.results = [];           // [{id,title,channel,duration_s}]
         this.thumbs = {};            // id -> { w, h, buf } (RGBA, 160x90 or 320x180), for ids some list shows
@@ -113,10 +117,13 @@ class Model {
         this.rev = 0;                // bumped on every change the screens show
     }
     active() { return ACTIVE.indexOf(this.state) >= 0; }
+    /** the service is older than this app needs: its version (or 'old', one that does not say it), else null */
+    serviceOld() { return this.connected && this.service && (this.service === 'old' || older(this.service, SERVICE_NEED)) ? this.service : null; }
     _changed() { this.rev++; }
 
     setConnected(on) {
         this.connected = on;
+        this.service = null;
         if (on) { this.send({ cmd: 'status' }); this.send({ cmd: 'auth_status' }); this.send({ cmd: 'positions' }); this.videoOn = null; this._video(); } else {
             this.searching = false; this.state = 'idle'; this.pending.clear();
             this.auth = { state: 'unknown', code: null, url: null, msg: null };
@@ -142,6 +149,7 @@ class Model {
             this.state = String(m.state || 'idle');
             if (typeof m.pct === 'number') this.pct = m.pct;
             this.buffering = m.buffering === true;
+            this.service = typeof m.version === 'string' ? m.version : 'old';
             // another video than the one asked (the daemon's own, after an app restart): title and channel from a list;
             // either way the daemon's title wins unless it is only the id (said while preparing)
             if (m.id !== undefined && m.id !== this.id) { const r = this.item(m.id); this.id = m.id; this.title = r ? String(r.title || '') : ''; this.channel = r ? String(r.channel || '') : ''; }
@@ -367,4 +375,4 @@ function clock(ms) {
     return h ? h + ':' + p(m) + ':' + p(ss) : m + ':' + p(ss);
 }
 
-module.exports = { Ctl, Model, clock, SOCKET, FEEDS, FEED_MAX, SHELF_MAX };
+module.exports = { Ctl, Model, clock, SERVICE_NEED, SOCKET, FEEDS, FEED_MAX, SHELF_MAX };

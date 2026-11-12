@@ -46,7 +46,7 @@ const { setImage } = require('./kit/record');
 const { HMI } = require('./kit/display');
 const { tr, short } = require('./tr');
 const Parked = require('./kit/parked');
-const { Ctl, Model, clock, SOCKET, FEEDS, SHELF_MAX } = require('./yt');
+const { Ctl, Model, clock, SERVICE_NEED, SOCKET, FEEDS, SHELF_MAX } = require('./yt');
 const { spell } = require('./speller');
 
 const W = 1600, H = 520;
@@ -167,6 +167,7 @@ mgu.run({
         function info() {
             let s;
             if (!model.connected) s = tr('The RideTube service (jap-ridetube-d) is not running');
+            else if (model.serviceOld()) s = oldText();
             else if (model.searchError) s = tr('Search: %s', model.searchError);
             else if (model.error) s = tr('Error: %s', model.error);
             else if (model.active()) s = (model.state === 'preparing' ? tr('Preparing %s %: ', Math.round(model.pct)) : model.state === 'paused' ? tr('Paused: ') : tr('Playing: ')) + model.title;
@@ -700,6 +701,14 @@ mgu.run({
             if (sub) cv.text(fit(cv, sub, 24, 1360, LIT), browsing() ? MID : W / 2, 336, 24, C.dim, { literal: true, align: 'center' });
         }
         const OFF = tr('The RideTube service (jap-ridetube-d) is not running');
+        // an app updated without its service: the new parts of playback would quietly not work - say so on every page
+        const oldText = () => tr('Update the RideTube service in the MGU Store: %s on the car, this app needs %s', model.serviceOld() === 'old' ? tr('an older one') : model.serviceOld(), SERVICE_NEED);
+        function oldService(cv) {
+            const t = oldText();
+            const w2 = Math.min(cv.textWidth(t, 24, LIT) + 48, W - X0 - 24), x = browsing() ? (RAIL_W + W - w2) / 2 : (W - w2) / 2;
+            cv.roundRect(x, H - 72, w2, 52, 26, '#4a3a10');
+            cv.text(fit(cv, t, 24, w2 - 48, LIT), x + 24, H - 38, 24, '#ffd27a', LIT);
+        }
         const OFF2 = tr('Install the RideTube service (jap-ridetube-d) from the MGU Store');
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
@@ -1040,6 +1049,7 @@ mgu.run({
                 else {
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    if (model.serviceOld() && mode !== 'player') oldService(cv);
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }

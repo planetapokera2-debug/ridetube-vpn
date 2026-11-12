@@ -18,6 +18,8 @@ const cp = require('child_process');
 const readline = require('readline');
 const socksLib = require('./socks');
 
+// said in every state event: the app tells the owner when the service is older than it needs (component.json's; a test checks)
+const VERSION = '0.3.13';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
 const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
@@ -1123,7 +1125,7 @@ Daemon.prototype.setState = function (s) {
 Daemon.prototype.sendState = function (pct) {
     this.buffering = this.isBuffering();
     const o = { ev: 'state', state: this.state, pct: pct === undefined ? (this.state === 'preparing' ? this.pct || 0 : null) : pct,
-        id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering };
+        id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering, version: VERSION };
     this.emit(o);
 };
 // playing ahead of the video fetched so far, while the fetcher still writes it
@@ -1716,7 +1718,7 @@ Daemon.prototype.close = async function () {
     if (this.server) this.server.close();
 };
 
-module.exports = { qualityHeight: qualityHeight, channelTiles: channelTiles, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { VERSION: VERSION, qualityHeight: qualityHeight, channelTiles: channelTiles, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
 
 // the uplink's DNS servers (its lease): the system resolver (127.0.0.1) answers no internet names. No
 // lease (uplink down or not installed): the system resolver, as before
