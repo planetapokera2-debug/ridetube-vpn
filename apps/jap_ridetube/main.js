@@ -259,8 +259,9 @@ mgu.run({
         /* ---------- leaving the app (VPN build, setting "Pause when leaving the app"): none of its screens shown for
          * 2 s, it pauses; a video still being prepared then pauses once it starts. Played again from elsewhere (the
          * car's media controls) while away, it plays on: only the leaving pauses ---------- */
-        let awayT = null, awayPrep = false;
-        const oursShown = () => ['VIEW', 'MAIN'].some((n) => ui.isVisible(n));
+        let awayT = null, awayPrep = false, appHidden = false;
+        // the HMI can keep a screen in the app's stack (so "visible") behind Home: the app's own hide counts too
+        const oursShown = () => !appHidden && ['VIEW', 'MAIN'].some((n) => ui.isVisible(n));
         const leaveOn = () => settings.get('stop_on_leave') !== false;
         function leftCheck() {
             clearTimeout(awayT); awayT = null; awayPrep = false;
@@ -268,8 +269,9 @@ mgu.run({
             awayT = setTimeout(() => {
                 awayT = null;
                 if (oursShown() || !leaveOn()) return;
-                if (model.state === 'playing') { log.info('left the app: paused'); model.toggle(); }
-                else if (model.state === 'preparing') awayPrep = true;
+                if (model.state === 'playing') { log.info('left the app: paused'); note('пауза'); model.toggle(); }
+                else if (model.state === 'preparing') { note('пауза после подготовки'); awayPrep = true; }
+                else note('не играло: ' + model.state);
             }, 2000);
         }
         function leftPlay() {
@@ -277,7 +279,40 @@ mgu.run({
             awayPrep = false;
             if (model.state === 'playing' && !oursShown() && leaveOn()) { log.info('left the app while preparing: paused'); model.toggle(); }
         }
-        ui.onVisible(() => leftCheck());
+        ui.onVisible((name, v) => { note(name + (v ? '+' : '-')); if (v) appHidden = false; leftCheck(); });
+        if (ctx.app && ctx.app.on) ctx.app.on('changeVisibility', (d) => {
+            const v = !(d && d.visible === false);
+            note('app' + (v ? '+' : '-'));
+            appHidden = !v;
+            leftCheck();
+        });
+        if (ui.onFocus) ui.onFocus((name, on) => note(name + (on ? ' фокус' : ' под окном')));
+
+        /* ---------- diagnostics on the player (VPN build, while the car's problems are found without SSH): what the
+         * picture, the leaving and the battery go by, one line under the title. Russian only, as the build ---------- */
+        const seen = [];
+        function note(s) { seen.push([Date.now(), s]); if (seen.length > 5) seen.shift(); dirty = true; }
+        let prepFrom = 0;
+        function diag() {
+            const t = Date.now(), sp = parked.speed(), age = parked.age();
+            let file = 'нет';
+            try { file = fs.statSync(VPATH).isFile() ? 'есть' : 'нет'; } catch (e) { /* none */ }
+            const g = gpu(), lim = Number(settings.get('battery'));
+            const sc = ['VIEW', 'MAIN', 'SETTINGS'].map((n) => n + (ui.isVisible(n) ? (ui.hasFocus && !ui.hasFocus(n) ? '(под окном)' : '+') : '-')).join(' ');
+            const a = [
+                'скорость ' + (sp === null ? 'нет' : Math.round(sp) + ' км/ч ' + Math.round(age / 1000) + ' с назад') + (parked.moving() ? ' (едем)' : ''),
+                sc + (appHidden ? ' app-' : ''),
+                'GPU ' + (g ? 'да' : 'нет') + ', файл видео ' + file + ', картинка ' + (videoShown ? 'да' : 'нет'),
+                'АКБ ' + (soc === null ? '?' : soc + ' %') + (lim ? ' (пауза ниже ' + lim + ')' : ''),
+                model.state === 'preparing' && prepFrom ? 'подготовка ' + Math.round((t - prepFrom) / 1000) + ' с' : model.state,
+            ];
+            const ev = 'события: ' + (seen.length ? seen.map((e) => Math.round((t - e[0]) / 1000) + ' с ' + e[1]).reverse().join(', ') : '-');
+            return [a.slice(0, 3).join(' · '), a.slice(3).concat([ev]).join(' · ')];
+        }
+        setInterval(() => {
+            if (model.state === 'preparing') { if (!prepFrom) prepFrom = Date.now(); } else prepFrom = 0;
+            if (mode === 'player' && overlay()) dirty = true;     // the line's seconds
+        }, 1000);
 
         /* ---------- the 12 V battery while parked: a warning 5 points above the setting's level, paused below it ---------- */
         let soc = null, socWarned = false;
@@ -291,6 +326,7 @@ mgu.run({
             if (parked.moving() || model.state !== 'playing') return;          // driving charges it
             if (soc < lim) {
                 model.toggle();
+                note('АКБ ' + soc + ' %: пауза');
                 model.toast = { text: tr('12 V battery at %s % - paused. Start the car to keep watching', soc), until: Date.now() + 15000, warn: true };
             } else if (soc < lim + 5 && !socWarned) {
                 socWarned = true;
@@ -731,6 +767,7 @@ mgu.run({
                 cv.text(fit(cv, model.title, 30, BOX.w - 60, LITB), BOX.x + 30, BOX.y + 48, 30, '#ffffff', LITB);
                 if (it && it.channel) cv.text(fit(cv, it.channel, 22, BOX.w - 60, LIT), BOX.x + 30, BOX.y + 82, 22, '#cccccc', LIT);
             }
+            diag().forEach((l, i) => cv.text(fit(cv, l, 20, BOX.w - 60, LIT), BOX.x + 30, BOX.y + 112 + i * 26, 20, '#ffd27a', LIT));
             let mid = null;
             if (!model.connected) mid = OFF;
             else if (model.state === 'preparing') {
@@ -876,6 +913,7 @@ mgu.run({
             const ch = model.channel || (model.item(model.id) || {}).channel;
             if (model.title) cv.text(fit(cv, model.title, 30, SW - LX - 160, LITB), LX + 96, by - 4, 30, '#ffffff', LITB);
             if (ch) cv.text(fit(cv, ch, 22, SW - LX - 300, LIT), LX + 96, by + 30, 22, '#cccccc', LIT);
+            diag().forEach((l, i) => cv.text(fit(cv, l, 20, SW - LX - 140, LIT), LX + 96, by + 66 + i * 26, 20, '#ffd27a', LIT));
             // top right, On phone: a QR code of the video's public link at this second (nothing is kept on the car)
             if (model.id) {
                 const px = SW - 150;

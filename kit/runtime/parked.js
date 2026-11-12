@@ -5,6 +5,7 @@
  *   const parked = require('./kit/parked').watch(ctx, log);
  *   parked.moving()   // true while the car drives (above MAX_KMH)
  *   parked.speed()    // km/h last read, or null (no speed: a VM / bench)
+ *   parked.age()      // ms since that read, or null
  *
  * Needs "de.bmw.infotainment.vehicle.Vehicle2": { "statusCarSpeed2": "rs" } in app.json "signals".
  * Every game has a setting "parkedOnly" (bool, on by default) and checks it with moving().
@@ -31,6 +32,7 @@ function watch(ctx, log, opts) {
     return {
         moving: () => (speed === null || (strict && now() - at > STALE_MS) ? strict : speed > MAX_KMH),
         speed: () => speed,
+        age: () => (at ? now() - at : null),    // ms since the last speed read (null: none yet)
     };
 }
 

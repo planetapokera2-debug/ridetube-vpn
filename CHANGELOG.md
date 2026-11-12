@@ -1,5 +1,15 @@
 # Changelog
 
+## App 0.3.12 (VPN build, modified version)
+
+- The 12 V battery pause goes back to Never once ("reset": 1): a car that had saved any setting kept the old
+  65 % with it, and paused a video on a healthy battery.
+- Pause when leaving the app also on the app's own hide (changeVisibility): the HMI can keep a screen in the
+  app's stack behind Home, so it never read as hidden.
+- Diagnostics on the player, two lines under the title (Russian, while the car is checked without SSH): the speed
+  and its age, which screens are shown, the GPU, the video file and the picture, the battery and its limit, the
+  preparing time, the last visibility events. kit parked.js gets age().
+
 ## App 0.3.11, service 0.3.11 (VPN build, modified version)
 
 - In Russian: the service asks YouTube's feeds and search in Russian, for Russia (hl ru, gl RU: shelf titles,
