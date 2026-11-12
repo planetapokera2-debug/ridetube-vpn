@@ -51,6 +51,8 @@ function defaults() {
         fetcher: ['/var/opt/mgu-python/current/bin/python3', path.join(here, 'ytfetch.py')],
         thumbCmd: ['/var/opt/jap-node22/current/bin/node', path.join(here, 'thumb.js')],
         startVideoMs: 6000,  // video fetched ahead before playback starts (later the buffering pause covers a slow link)
+        videoWait: true,     // past the video fetched with the picture on: the sound waits for it (checkBuffering)
+        aheadMs: 10000,      // ... and plays again with this much fetched ahead
         fetchRetryMs: [3000, 8000], // a fetch failing before playback (the network): tried again after these waits
         spare: true,         // keep a ytfetch.py serve (yt-dlp loaded) waiting while the app is in use
         warmMs: 600000,      // ... for this long after the app's last command
@@ -787,6 +789,7 @@ function Daemon(o) {
     this.head = null;      // {ms}: playing audio.head.m4a (the first ms of the audio) until audio.m4a is ready
     this.fullReady = false; // audio.m4a complete
     this.headWait = false; // past the head, waiting for audio.m4a: the player is paused, the state buffering
+    this.videoWait = false; // past the video fetched (picture on): the player stopped, ytdec paused, the state buffering
     this.switching = false; // head -> full: the player's events until the seek are the restart's, not ours
     this.settle = null;    // {ms, until}: after the switch, ignore the player's stale times below ms
     this.lastTickAt = 0;
@@ -1125,10 +1128,36 @@ Daemon.prototype.sendState = function (pct) {
 };
 // playing ahead of the video fetched so far, while the fetcher still writes it
 Daemon.prototype.isBuffering = function () {
-    return this.state === 'playing' && (this.headWait || (!!this.fetcher && this.elapsed + 1000 > this.fetchedMs));
+    return this.state === 'playing' && (this.headWait || this.videoWait || (!!this.fetcher && this.elapsed + 1000 > this.fetchedMs));
 };
+// VPN build: playing past the video fetched with the picture on (a seek ahead, a link slower than the video), the
+// sound and the picture wait together (as YouTube does) - before, the sound played on over a frozen picture
 Daemon.prototype.checkBuffering = function () {
+    if (this.videoWait) {
+        if (!this.fetcher || !this.videoOn || !this.child || this.fetchedMs >= this.elapsed + this.opts.aheadMs) this.endVideoWait();
+        else if (Date.now() - this.lastTimeEv >= 500) {     // no ticks while stopped: the app's bar follows the fetch
+            this.lastTimeEv = Date.now();
+            this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total, fetched: this.fetchedMs });
+        }
+    } else if (this.opts.videoWait && this.state === 'playing' && this.videoOn && this.child && this.fetcher && !this.headWait && !this.switching
+        && (this.stoppedAt === null || this.stoppedAt === undefined) && this.elapsed + 1000 > this.fetchedMs) this.startVideoWait();
     if (this.isBuffering() !== this.buffering) this.sendState();
+};
+Daemon.prototype.startVideoWait = function () {
+    this.videoWait = true;
+    this.log('video: at ' + this.elapsed + ', fetched to ' + this.fetchedMs + ': the sound waits for the picture');
+    this.toYtdec('pause');
+    this.hold(this.elapsed).catch((e) => this.log(e));
+    this.lastTimeEv = Date.now();     // the app's bar: where it waits, how far the fetch is
+    this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total, fetched: this.fetchedMs });
+};
+// fetched far enough (or the fetch ended, or the picture went off): the player again where it stopped, as resume()
+Daemon.prototype.endVideoWait = function () {
+    this.videoWait = false;
+    this.log('video: fetched to ' + this.fetchedMs + ', on at ' + this.stoppedAt);
+    if (this.state !== 'playing' || this.stoppedAt === null || this.stoppedAt === undefined) return; // paused meanwhile: resume() starts it
+    this.lastProgress = Date.now();
+    this.restartAudio().catch((e) => this.log(e));
 };
 
 Daemon.prototype.prune = function () {
@@ -1222,6 +1251,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
     this.fetchedMs = Infinity;
     this.head = null;
     this.headWait = false;
+    this.videoWait = false;
     this.switching = false;
     this.settle = null;
     this.fullReady = true;
@@ -1283,7 +1313,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
 Daemon.prototype.onFullAudio = function () {
     this.fullReady = true;
     if (!this.head || !this.ticking || this.switching) return undefined; // not playing yet: play() picks it
-    if (this.paused) {
+    if (this.paused || this.videoWait) {      // (stopped: the restart plays audio.m4a)
         this.stoppedAt = this.elapsed;
         this.head = null;
         this.headWait = false;
@@ -1468,33 +1498,36 @@ Daemon.prototype.resume = async function () {
     this.lastProgress = Date.now();
     this.setState('playing');
     if (this.headWait) return; // still past the head: ytdec and the player stay paused until the switch
-    if (this.stoppedAt !== null && this.stoppedAt !== undefined) { // the player stopped mid-file: start it again there
-        const gen = this.gen;
-        this.sawPlay = false; // the new file's own STOP/PLAY is not a stop mid-file
-        this.toYtdec('seek ' + this.stoppedAt);
-        this.toYtdec('resume');
-        // stopped, the player ignores playFile and PLAY (car, 2026-11-03): a new connection, as a new video starts
-        try {
-            await this.audio.release();
-            if (gen !== this.gen) return;
-            await this.audio.play(path.join(this.cur.dir, this.head ? 'audio.head.m4a' : 'audio.m4a'));
-        } catch (e) {
-            if (gen === this.gen) await this.failPlayback('resume: ' + e.message);
-            return;
-        }
-        if (gen !== this.gen || this.state !== 'playing') return; // stopped, or paused again meanwhile
-        // a setTime before the new file's first tick is dropped (it started at 0 on the car): wait for one (3 s at most)
-        await new Promise((r) => { this.tickWaiter = r; setTimeout(r, 3000); });
-        this.tickWaiter = null;
-        if (gen !== this.gen || this.state !== 'playing') return;
-        const at = this.stoppedAt;  // (a seek meanwhile moved it: seek() keeps it while the file restarts)
-        this.stoppedAt = null;
-        this.settle = { ms: at, until: Date.now() + 3000 };
-        await this.audio.seek(at);
-        return;
-    }
+    if (this.videoWait) return this.checkBuffering(); // still past the video fetched: on once it is there
+    if (this.stoppedAt !== null && this.stoppedAt !== undefined) return this.restartAudio(); // stopped mid-file
     this.toYtdec('resume');
     await this.audio.button('PLAY');
+};
+// the player stopped mid-file (our STOP: a pause, the video wait): start it again at stoppedAt
+Daemon.prototype.restartAudio = async function () {
+    const gen = this.gen;
+    this.sawPlay = false; // the new file's own STOP/PLAY is not a stop mid-file
+    this.toYtdec('seek ' + this.stoppedAt);
+    this.toYtdec('resume');
+    // stopped, the player ignores playFile and PLAY (car, 2026-11-03): a new connection, as a new video starts
+    try {
+        await this.audio.release();
+        if (gen !== this.gen) return;
+        await this.audio.play(path.join(this.cur.dir, this.head ? 'audio.head.m4a' : 'audio.m4a'));
+    } catch (e) {
+        if (gen === this.gen) await this.failPlayback('resume: ' + e.message);
+        return;
+    }
+    if (gen !== this.gen || this.state !== 'playing') return; // stopped, or paused again meanwhile
+    // a setTime before the new file's first tick is dropped (it started at 0 on the car): wait for one (3 s at most)
+    await new Promise((r) => { this.tickWaiter = r; setTimeout(r, 3000); });
+    this.tickWaiter = null;
+    if (gen !== this.gen || this.state !== 'playing') return;
+    const at = this.stoppedAt;  // (a seek meanwhile moved it: seek() keeps it while the file restarts)
+    this.stoppedAt = null;
+    this.settle = { ms: at, until: Date.now() + 3000 };
+    await this.audio.seek(at);
+    this.checkBuffering();     // (the link fell behind again meanwhile)
 };
 Daemon.prototype.seek = async function (ms) {
     if (this.state !== 'playing' && this.state !== 'paused') return;
@@ -1508,14 +1541,16 @@ Daemon.prototype.seek = async function (ms) {
     // shortcut: once waiting, a seek back into the head still waits for audio.m4a (a few s), simpler than replaying the head
     if (this.headWait) return this.checkBuffering();
     if (this.head && !this.switching && ms > this.head.ms - this.opts.headMarginMs) return this.waitFull(ms);
+    if (this.stoppedAt !== null && this.stoppedAt !== undefined) { this.stoppedAt = ms; this.checkBuffering(); return undefined; } // resume() replays there
     this.checkBuffering();
-    if (this.stoppedAt !== null && this.stoppedAt !== undefined) { this.stoppedAt = ms; return undefined; } // resume() replays there
+    if (this.videoWait) return undefined;  // past the video fetched: the player stopped there, on once it is fetched
     await this.audio.seek(ms);
 };
 Daemon.prototype.setVideo = function (on) {
     this.videoOn = on;
     this.lastProgress = Date.now();
     this.toYtdec('video ' + (on ? 1 : 0));
+    this.checkBuffering();
 };
 
 // zoom while playing: ytdec again at the clock with the other mode (the sound plays on)
@@ -1541,7 +1576,7 @@ Daemon.prototype.onTime = function (v) {
     if (!this.ticking || !v || typeof v.elapsed !== 'number') return;
     if (!(v.total > 1)) return; // {elapsed:0,total:1} right after playFile
     if (this.tickWaiter) { this.tickWaiter(); return; } // resume(): the restarted file plays, its setTime can follow
-    if (this.switching || this.headWait) return; // the restart's times, or a paused player
+    if (this.switching || this.headWait || this.videoWait) return; // the restart's times, or a paused player
     if (this.settle && Date.now() < this.settle.until && v.elapsed < this.settle.ms - 2000) return; // before our setTime landed
     this.elapsed = v.elapsed;
     this.lastTickAt = Date.now();
@@ -1559,7 +1594,8 @@ Daemon.prototype.onTime = function (v) {
     const now = Date.now();
     if (now - this.lastTimeEv >= 240) { // <= 4/s
         this.lastTimeEv = now;
-        this.emit({ ev: 'time', elapsed: v.elapsed, total: this.total });
+        // fetched (VPN build): the video written so far (null: all of it) - the bar shows it, a seek past it waits for it
+        this.emit({ ev: 'time', elapsed: v.elapsed, total: this.total, fetched: isFinite(this.fetchedMs) ? this.fetchedMs : null });
     }
 };
 Daemon.prototype.onPlayerState = function (v) {
@@ -1662,7 +1698,7 @@ Daemon.prototype.ytdecDied = function (child, why) {
 Daemon.prototype.watchdog = function () {
     if (!this.child || this.state !== 'playing' || !this.videoOn || this.eof) return;
     // waiting for video not fetched yet (buffering, or the fetcher ended early): not a stall
-    if (this.headWait || this.elapsed + 1000 > this.fetchedMs) { this.lastProgress = Date.now(); return; }
+    if (this.headWait || this.videoWait || this.elapsed + 1000 > this.fetchedMs) { this.lastProgress = Date.now(); return; }
     if (Date.now() - this.lastProgress < this.opts.watchdogMs) return;
     this.log('watchdog: no decoded frames for ' + this.opts.watchdogMs + ' ms');
     const c = this.child;

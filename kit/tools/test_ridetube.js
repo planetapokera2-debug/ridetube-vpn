@@ -15,6 +15,9 @@ const path = require('path');
 const { Ctl, Model, clock } = require('../../apps/jap_ridetube/yt');
 
 const quiet = { info() {}, warn() {}, error(m, e) { throw e || new Error(m); } };
+// an error in a handler or a timer (an app's log.error throws here) fails the run, not only a hang
+process.on('unhandledRejection', (e) => { console.error('FAIL unhandled', e); process.exit(1); });
+process.on('uncaughtException', (e) => { console.error('FAIL uncaught', e); process.exit(1); });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // the test's folders (the renderer stream there grows to tens of MB): removed when it ends, either way
 const tmps = [];
@@ -300,6 +303,28 @@ async function appFrames() {
     const leave = () => { away = true; visFns.forEach((fn) => fn('VIEW', false)); };
     const back = () => { away = false; visFns.forEach((fn) => fn('VIEW', true)); };
     hu.ctx.focus = (k) => disp.focusPage(k);
+    hu.ctx.app = new (require('events').EventEmitter)();   // (the SDK's app: changeVisibility)
+    // the HMI's keyboard (speller use case): the driver types spellText, then OK
+    let spellText = 'тест', spells = 0;
+    hu.ctx.app.getUseCaseFactory = async () => ({
+        create: async () => {
+            let fn = null;
+            const proxy = {
+                init: async () => {}, waitUntilAvailable: async () => {},
+                notify: { subscribe: async (f) => { fn = f; return 1; }, unsubscribe: async () => {} },
+                interactionState: { getValue: async () => 'READY' },
+                start: async () => {
+                    spells++;
+                    setTimeout(() => fn({ interactionParameters: new Map([[102, spellText]]) }), 20);
+                    setTimeout(() => fn({ interactionParameters: new Map([[102, spellText], [105, 1]]) }), 40);
+                },
+            };
+            return { proxy, token: 't' };
+        },
+    });
+    const Rec = require(path.join(hu.kitDir, 'record')).Recorder, said = [];
+    const recText = Rec.prototype.text;
+    Rec.prototype.text = function (str) { said.push(String(str)); return recText.apply(this, arguments); };
     hu.start();
     await until(() => d.cmds('auth_status').length, 3000, 'app connects and asks for the account');
     const POOL = (id) => id >= 8 && id < 64;
@@ -417,6 +442,36 @@ async function appFrames() {
         back(); speedH({ speedVehicleCentreOfGravity: 0 });   // (the speed read 5 s ago is stale by now: parked again)
         await sleep(300); await hu.loopFn();
         console.log('ok   pause when leaving the app (2 s), not when back in time or with the setting off');
+        // the app's own hide (changeVisibility) while the HMI keeps VIEW listed (behind Home): it pauses too
+        d.send({ ev: 'state', state: 'playing', id: 'aaa', title: 'Song' });
+        await sleep(100);
+        const nHide = d.cmds('pause').length;
+        hu.ctx.app.emit('changeVisibility', { visible: false });
+        await until(() => d.cmds('pause').length > nHide, 3000, 'the app hidden, VIEW still listed: paused');
+        hu.ctx.app.emit('changeVisibility', { visible: true });
+        back(); speedH({ speedVehicleCentreOfGravity: 0 });
+        d.send({ ev: 'state', state: 'playing', id: 'aaa', title: 'Song' });
+        await sleep(2300);
+        assert.strictEqual(d.cmds('pause').length, nHide + 1, 'shown again: plays on');
+        console.log('ok   the app\'s own hide pauses too (a screen the HMI keeps listed behind Home)');
+        // waiting for the video (service 0.3.12: a seek past the video fetched): the overlay stays and says how far
+        speedH({ speedVehicleCentreOfGravity: 0 });
+        d.send({ ev: 'state', state: 'playing', id: 'aaa', title: 'Song', buffering: true });
+        d.send({ ev: 'time', elapsed: 40000, total: 200000, fetched: 12000 });
+        await sleep(300);
+        disp.onTap(800, 300);                                     // a tap beside the controls: no hiding while waiting
+        said.length = 0; await hu.loopFn();
+        assert.ok(disp.pageTargets.find((t) => t.key === 'ov:play').w < 300, 'waiting: the overlay stays');
+        assert.ok(said.indexOf('Loading the video up to here: 0:12 of 0:40') >= 0, said.join('|'));
+        assert.ok(said.some((x) => /^скорость 0 км\/ч/.test(x)) && said.some((x) => /видео загружено до 0:12 \(ждём\)/.test(x)), 'the diagnostics lines: ' + said.join('|'));
+        disp.pageTargets.find((t) => t.key === 'ov:play').run();
+        await lastIs(d, { cmd: 'pause' }, 'pause while waiting');
+        d.send({ ev: 'state', state: 'playing', id: 'aaa', title: 'Song', buffering: false });
+        d.send({ ev: 'time', elapsed: 40000, total: 200000 });
+        await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(said.indexOf('Loading the video up to here: 0:12 of 0:40') < 0, 'fetched: the notice gone');
+        assert.ok(said.some((x) => /видео загружено всё/.test(x)), said.join('|'));
+        console.log('ok   waiting for the video: the overlay stays and says how far; play/pause; the diagnostics');
         disp.onTap(800, 300);
         await hu.loopFn();
         const hid = disp.pageTargets;
@@ -507,6 +562,38 @@ async function appFrames() {
         await hu.loopFn();
         assert.strictEqual(disp.focusKey, 'tgt:r:0:lib1', 'the controller back on the tile it left from');
         console.log('ok   no bar, rail (Playing while a video plays), back from the player onto the tile');
+        // every HMI button, then every target of the results and of the player, each pressed once: nothing throws
+        // (an app error throws here: quiet.error), each screen still draws
+        const press = async (fn) => { await Promise.race([Promise.resolve().then(fn), sleep(1500)]); await sleep(30); await hu.loopFn(); };
+        const hmi = Object.keys(hu.handlers).filter((n) => n !== 'BTN_ACCOUNT');   // (signing out: its own test)
+        for (const n of hmi) await press(() => hu.handlers[n]({ row: 0, value: 0 }));
+        // Search (the HMI menu): the keyboard opens, the typed words are searched
+        const nS = d.cmds('search').length;
+        spellText = 'автобус на гусеницах';
+        await press(() => hu.handlers.BTN_SEARCH());
+        await until(() => d.cmds('search').length > nS, 2000, 'Search: the typed words searched');
+        assert.ok(spells > 0, 'the keyboard opened');
+        assert.deepStrictEqual(d.cmds('search').slice(-1)[0], { cmd: 'search', q: 'автобус на гусеницах' });
+        const sweep = async (open, what) => {
+            await open(); const all = keys();
+            assert.ok(all.length > 3, what + ': ' + all);
+            for (const k of all) {
+                await open();
+                const tg = disp.pageTargets.find((x) => x.key === k);
+                if (tg) await press(() => tg.run());
+            }
+            return all;
+        };
+        d.send({ ev: 'results', q: 'x', items: [{ id: 'lib1', title: 'First', channel: 'Me', duration_s: 60 }, { id: 'lib2', title: 'Second' }] });
+        await sleep(100);
+        const rk = await sweep(async () => { await press(() => hu.handlers.BTN_RESULTS()); }, 'results');
+        const pk = await sweep(async () => {
+            d.send({ ev: 'state', state: 'playing', id: 'lib1', title: 'First' }); d.send({ ev: 'time', elapsed: 5000, total: 60000 });
+            await sleep(50); await press(() => hu.handlers.BTN_NOW()); disp.onPageFocus('ov:play'); await hu.loopFn();
+        }, 'player');
+        assert.ok(pk.indexOf('ov:play') >= 0 && pk.indexOf('ov:bar') >= 0, 'player targets: ' + pk);
+        d.send({ ev: 'state', state: 'idle' }); await sleep(100); await hu.loopFn();
+        console.log('ok   every HMI button (' + hmi.length + '), every target of the results (' + rk.length + ') and the player (' + pk.length + ') pressed: no error');
     }
     console.log('ok   app frames (Home signed out, results, offline search, player through the renderer stream)');
 
@@ -768,6 +855,12 @@ function extrasModel() {
     assert.strictEqual(m.retry, 2, 'the network lost: trying again (2)');
     m.onMsg({ ev: 'state', state: 'playing', id: 'DDDDDDDDDDD' });
     assert.strictEqual(m.retry, 0, 'playing: no more retry note');
+    m.onMsg({ ev: 'time', elapsed: 40000, total: 600000, fetched: 12000 });
+    m.onMsg({ ev: 'state', state: 'playing', id: 'DDDDDDDDDDD', buffering: true });
+    assert.ok(m.fetched === 12000 && m.buffering === true, 'the video fetched so far, waiting for it');
+    m.onMsg({ ev: 'time', elapsed: 41000, total: 600000 });
+    m.onMsg({ ev: 'state', state: 'playing', id: 'DDDDDDDDDDD' });
+    assert.ok(m.fetched === null && m.buffering === false, 'all of it (or an older service): nothing to show');
     console.log('ok   extras: Continue watching, positions, chapters, the skipped toast');
 }
 

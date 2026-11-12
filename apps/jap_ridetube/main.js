@@ -305,6 +305,7 @@ mgu.run({
                 'GPU ' + (g ? 'да' : 'нет') + ', файл видео ' + file + ', картинка ' + (videoShown ? 'да' : 'нет'),
                 'АКБ ' + (soc === null ? '?' : soc + ' %') + (lim ? ' (пауза ниже ' + lim + ')' : ''),
                 model.state === 'preparing' && prepFrom ? 'подготовка ' + Math.round((t - prepFrom) / 1000) + ' с' : model.state,
+                'видео загружено ' + (model.fetched === null ? 'всё' : 'до ' + clock(model.fetched)) + (model.buffering ? ' (ждём)' : ''),
             ];
             const ev = 'события: ' + (seen.length ? seen.map((e) => Math.round((t - e[0]) / 1000) + ' с ' + e[1]).reverse().join(', ') : '-');
             return [a.slice(0, 3).join(' · '), a.slice(3).concat([ev]).join(' · ')];
@@ -338,7 +339,9 @@ mgu.run({
         let ovUntil = 0, qrUntil = 0;   // qrUntil: the On phone QR card shows until then
         function wake() { ovUntil = Date.now() + OVERLAY_MS; dirty = true; }
         // it stays while there is no moving picture to look at
-        const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg();
+        // the sound and the picture waiting for the video still being fetched (a seek past it, a slow link): the overlay says so
+        const loading = () => model.state === 'playing' && model.buffering && !noVideo();
+        const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg() || loading();
         const overlay = () => pinned() || Date.now() < ovUntil || Date.now() < qrUntil;
         // a tap beside the controls (no target): hides them
         if (ctx.onTap) ctx.onTap(() => { if (mode === 'player' && !pinned() && overlay()) { ovUntil = 0; dirty = true; } });
@@ -782,6 +785,7 @@ mgu.run({
             else if (noVideo()) mid = tr('Video stops while driving - the sound plays on');
             else if (!cv.place || !gpu()) mid = tr('The picture needs the GPU renderer (mgu-render) - the sound plays');
             else if (!videoShown) mid = tr('Starting the picture...');
+            else if (loading()) mid = tr('Loading the video up to here: %s of %s', clock(model.fetched || 0), clock(model.elapsed));
             if (model.state === 'paused' && !mid) { cv.circle(cx, cy, 60, '#000000a0'); cv.arc(cx, cy, 57, 60, 0, 360, '#ffffff50'); tri(cv, cx + 5, cy, 46, '#ffffff'); }
             if (mid) {
                 if (model.state === 'paused') { cv.circle(cx, cy - 40, 46, '#000000a0'); tri(cv, cx + 4, cy - 40, 36, '#ffffff'); }
@@ -792,6 +796,7 @@ mgu.run({
                 cv.gradientRect(BOX.x, bot - 120, BOX.w, 120, [[0, '#00000000'], [1, '#000000d8']]);
                 const tx = BOX.x + 30, tw = BOX.w - 60, ty = bot - 62, k = Math.min(1, model.elapsed / model.total), fx = tx + Math.round(tw * k);
                 cv.roundRect(tx, ty, tw, 6, 3, '#ffffff55');
+                if (model.fetched !== null) cv.roundRect(tx, ty, Math.round(tw * Math.min(1, model.fetched / model.total)), 6, 3, '#ffffffaa');   // fetched
                 cv.roundRect(tx, ty, fx - tx, 6, 3, C.red);
                 cv.circle(fx, ty + 3, 9, C.red);
                 cv.text(clock(model.elapsed), tx, bot - 20, 24, '#ffffff', LITB);
@@ -946,6 +951,7 @@ mgu.run({
             else if (noVideo()) mid = tr('Video stops while driving - the sound plays on');
             else if (!gpu()) mid = tr('The picture needs the GPU renderer (mgu-render) - the sound plays');
             else if (live && !videoShown) mid = tr('Starting the picture...');
+            else if (loading()) mid = tr('Loading the video up to here: %s of %s', clock(model.fetched || 0), clock(model.elapsed));
             if (model.state === 'preparing') {
                 const p = Math.max(0, Math.min(100, model.pct || 0));
                 cv.circle(cx, cy, 56, '#00000099');
@@ -986,6 +992,7 @@ mgu.run({
                 const x0 = LX + 40, w = SW - x0 - 40, y = SH - 66, el = shownAt(), fx = x0 + Math.round(w * Math.min(1, el / model.total)), bf = focusKey === 'ov:bar';
                 const at = (ms) => x0 + Math.round(w * Math.min(1, ms / model.total)), ex = model.extras && model.extras.id === model.id ? model.extras : null;
                 cv.roundRect(x0, y, w, 6, 3, '#ffffff55');
+                if (model.fetched !== null) cv.roundRect(x0, y, at(model.fetched) - x0, 6, 3, '#ffffffaa');   // fetched
                 cv.roundRect(x0, y, fx - x0, 6, 3, C.red);
                 if (ex) sbSegs(ex).forEach((g) => cv.fillRect(at(g[0]), y, Math.max(3, at(g[1]) - at(g[0])), 6, sbColor(g)));   // SponsorBlock: skipped green, asked yellow
                 if (ex) ex.chapters.forEach((c) => { if (c[0] > 0) cv.fillRect(at(c[0]) - 2, y, 4, 6, '#000000'); });

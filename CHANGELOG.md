@@ -1,5 +1,17 @@
 # Changelog
 
+## App 0.3.13, service 0.3.12 (VPN build, modified version)
+
+- A seek past the video fetched so far (or a link slower than the video): the sound and the picture wait together
+  until 10 s of video past that point are fetched, then play on there (the service stops the player and restarts
+  it, as a pause and resume). Before, the sound played on over a frozen picture. The time events carry `fetched`;
+  the app draws the part fetched on the bar and, while waiting, keeps the overlay with "Загружаю видео до этого
+  места: 0:12 из 0:40".
+- Tests: every HMI button and every target of the results and the player pressed once; the HMI keyboard's search;
+  the app's own hide; the wait (seek, pause/resume while waiting, the picture off, on the audio head, a slow link);
+  the zoom test waits for ytdec's seek instead of a fixed moment (it failed now and then). Real searches checked
+  against YouTube (hl ru, gl RU): 13-19 videos a query.
+
 ## App 0.3.12 (VPN build, modified version)
 
 - The 12 V battery pause goes back to Never once ("reset": 1): a car that had saved any setting kept the old

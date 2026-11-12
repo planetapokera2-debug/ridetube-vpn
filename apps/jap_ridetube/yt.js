@@ -96,6 +96,8 @@ class Model {
         this.searchT = 0;
         this.state = 'idle'; this.pct = 0; this.id = null; this.title = ''; this.channel = '';
         this.elapsed = 0; this.total = 0;
+        this.fetched = null;         // ms of video fetched so far (null: all, or a daemon that does not say)
+        this.buffering = false;      // playing past it: the picture waits, the sound plays on
         this.error = null;
         this.videoOn = true;         // what the daemon was last told
         this.wantVideo = false;      // player shown and parked
@@ -139,6 +141,7 @@ class Model {
             const was = this.state;
             this.state = String(m.state || 'idle');
             if (typeof m.pct === 'number') this.pct = m.pct;
+            this.buffering = m.buffering === true;
             // another video than the one asked (the daemon's own, after an app restart): title and channel from a list;
             // either way the daemon's title wins unless it is only the id (said while preparing)
             if (m.id !== undefined && m.id !== this.id) { const r = this.item(m.id); this.id = m.id; this.title = r ? String(r.title || '') : ''; this.channel = r ? String(r.channel || '') : ''; }
@@ -146,7 +149,7 @@ class Model {
             if (t && (t !== this.id || !this.title)) this.title = t;
             if (this.state !== 'error') this.error = null;
             if (this.state !== 'preparing') this.retry = 0;
-            if (this.state === 'idle' || (was !== 'preparing' && this.state === 'preparing')) { this.elapsed = 0; this.total = 0; }
+            if (this.state === 'idle' || (was !== 'preparing' && this.state === 'preparing')) { this.elapsed = 0; this.total = 0; this.fetched = null; }
             // a fresh ytdec starts with video on: tell it again where we are
             if (this.state === 'playing' && was !== 'playing' && was !== 'paused') { this.videoOn = null; this._video(); }
         } else if (m.ev === 'auth') {
@@ -198,6 +201,7 @@ class Model {
         } else if (m.ev === 'time') {
             if (typeof m.elapsed === 'number') this.elapsed = m.elapsed;
             if (typeof m.total === 'number') this.total = m.total;
+            this.fetched = typeof m.fetched === 'number' ? m.fetched : null;
         } else if (m.ev === 'error') {
             // a daemon older than the account commands: no sign-in, nothing wrong with playback
             if (/^unknown cmd (auth|auth_status|sign_out|feed)$/.test(m.msg)) { this.auth = { state: 'unsupported', code: null, url: null, msg: null }; this._changed(); return; }

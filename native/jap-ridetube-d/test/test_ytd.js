@@ -138,6 +138,7 @@ async function main() {
     const d = new Daemon({
         someip: someip, srcGen: srcGen, ytdec: fakeYtdec, cacheDir: cache, logDir: tmp, sock: path.join(tmp, 'ctl.sock'),
         watchdogMs: 800, tickMs: 200, keep: 20, stateDir: stateDir, noSetuid: true, spare: false, resume: false, fetchRetryMs: [],
+        videoWait: false,    // (the fake fetch stops at 12 s of video while these tests tick far past it: the wait has its own tests)
         fetcher: [process.execPath, path.join(__dirname, 'fake_ytfetch.js'), ctl],
         accountFile: acct, ytRequest: fakeYt, log: (m) => logs.push(m)
     });
@@ -204,7 +205,7 @@ async function main() {
         subs.playerState('PLAYER_STATE_PLAY');
         tick(1226);
         const e = await c.waitFor((x) => x.ev === 'time');
-        assert.deepStrictEqual(e, { ev: 'time', elapsed: 1226, total: 60000 });
+        assert.deepStrictEqual(e, { ev: 'time', elapsed: 1226, total: 60000, fetched: null });
         await sleep(100);
         const cl = ytdecLines().filter((l) => / in clock /.test(l));
         assert.strictEqual(cl.length, 1);
@@ -584,7 +585,7 @@ async function main() {
         c.clear();
         tick(20000);
         const tm = await c.waitFor((x) => x.ev === 'time');
-        assert.deepStrictEqual(tm, { ev: 'time', elapsed: 20000, total: 600000 });
+        assert.deepStrictEqual(tm, { ev: 'time', elapsed: 20000, total: 600000, fetched: 12000 });
         await sleep(200);
         fs.writeFileSync(ctl, 'full');
         await waitUntil(() => called('setTime').length === 1);
@@ -730,6 +731,106 @@ async function main() {
     const readAcct = () => JSON.parse(fs.readFileSync(acct, 'utf8'));
     const ok = (o) => ({ status: 200, body: JSON.stringify(o) });
 
+    // ---- the video wait (VPN build): past the video fetched with the picture on, the sound waits for it
+    const waitPlay = async (id, m) => {
+        d.opts.videoWait = true;
+        fs.writeFileSync(ctl, m || ''); fs.writeFileSync(ytlog, ''); setMode('ok'); calls.length = 0;
+        await fetchPlay(id);
+        subs.playerState('PLAYER_STATE_PLAY');
+        await waitUntil(() => d.child && d.fetchedMs === 12000);
+        calls.length = 0; c.clear();
+    };
+    const waitDone = async () => { await stopIdle(); d.opts.videoWait = false; };
+
+    await t('video wait: a seek past the video fetched stops the sound there (buffering, no setTime); pause/resume keep waiting; fetched ahead -> the sound again at it', async () => {
+        await waitPlay('FFFFFFFFVW1');
+        tick(3000);
+        c.send({ cmd: 'seek', ms: 40000 });
+        const b = await c.waitFor((x) => x.ev === 'state' && x.buffering === true);
+        assert.strictEqual(b.state, 'playing');
+        await sleep(200);
+        assert.strictEqual(called('setTime').length, 0, 'no setTime past the video fetched');
+        assert.deepStrictEqual(called('sendButtonEvent').map((x) => x.a.button), ['STOP']);
+        assert.ok(d.videoWait);
+        assert.strictEqual(ytdecIns().slice(-2).join(), 'in seek 40000,in pause');
+        tick(41000);                                              // a stray time of the stopped player: ignored
+        assert.strictEqual(d.elapsed, 40000);
+        c.send({ cmd: 'pause' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'paused');
+        c.send({ cmd: 'resume' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.buffering === true);
+        await sleep(200);
+        assert.strictEqual(called('playFile').length, 0, 'still waiting: nothing played');
+        assert.ok(!called('sendButtonEvent').some((x) => x.a.button === 'PLAY'));
+        fs.writeFileSync(ctl, 'more');
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing' && x.buffering === false);
+        assert.ok(!d.videoWait);
+        await waitUntil(() => called('playFile').length === 1);
+        tick(0);                                                  // the restarted file's first tick
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('setTime')[0].a, { newTimeElapsed: 40000 });
+        assert.strictEqual(ytdecIns().slice(-2).join(), 'in seek 40000,in resume');
+        assert.strictEqual(ours().length, 1);
+        await waitDone();
+    });
+
+    await t('video wait: the app shows the fetch while waiting (time events with fetched); the picture off (driving, the app left) -> the sound again at once', async () => {
+        await waitPlay('FFFFFFFFVW2');
+        c.send({ cmd: 'video', on: false });
+        await sleep(100);
+        c.send({ cmd: 'seek', ms: 40000 });                       // no picture: a plain seek
+        await waitUntil(() => called('setTime').length === 1);
+        assert.ok(!d.videoWait);
+        c.send({ cmd: 'video', on: true });                       // the picture back, past the video: the wait
+        await waitUntil(() => d.videoWait);
+        assert.deepStrictEqual(called('sendButtonEvent').map((x) => x.a.button), ['STOP']);
+        const tm = await c.waitFor((x) => x.ev === 'time' && x.fetched === 12000, 3000);
+        assert.strictEqual(tm.elapsed, 40000);
+        c.send({ cmd: 'video', on: false });                      // gone again: no picture to wait for
+        await waitUntil(() => called('playFile').length === 1);
+        assert.ok(!d.videoWait);
+        tick(0);
+        await waitUntil(() => called('setTime').length === 2);
+        assert.deepStrictEqual(called('setTime')[1].a, { newTimeElapsed: 40000 });
+        c.send({ cmd: 'video', on: true });                       // (as the next tests expect it)
+        await waitUntil(() => d.videoOn);
+        await waitDone();
+    });
+
+    await t('video wait on the head: audio.m4a arriving while waiting is no switch; fetched ahead -> audio.m4a at the wait point', async () => {
+        await waitPlay('FFFFFFFFVW3', 'hold');
+        tick(20000);                                              // past the 12 s of video, on the 60 s head
+        await c.waitFor((x) => x.ev === 'state' && x.buffering === true);
+        assert.ok(d.videoWait);
+        assert.deepStrictEqual(called('sendButtonEvent').map((x) => x.a.button), ['STOP']);
+        fs.writeFileSync(ctl, 'full');
+        await waitUntil(() => d.fullReady);
+        await sleep(200);
+        assert.strictEqual(called('playFile').length, 0, 'no switch while waiting');
+        fs.writeFileSync(ctl, 'more');
+        await waitUntil(() => called('playFile').length === 1);
+        assert.strictEqual(path.basename(called('playFile')[0].a.path), 'audio.m4a');
+        tick(0);
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('setTime')[0].a, { newTimeElapsed: 20000 });
+        assert.strictEqual(d.head, null);
+        await waitDone();
+    });
+
+    await t('video wait: the link falls behind while playing (no seek) -> waits at the clock; the fetch ends -> on', async () => {
+        await waitPlay('FFFFFFFFVW4');
+        tick(11500);
+        await waitUntil(() => d.videoWait);
+        assert.deepStrictEqual(called('sendButtonEvent').map((x) => x.a.button), ['STOP']);
+        fs.writeFileSync(ctl, 'done');
+        await waitUntil(() => called('playFile').length === 1);
+        tick(0);
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('setTime')[0].a, { newTimeElapsed: 11500 });
+        assert.strictEqual(d.state, 'playing');
+        await waitDone();
+    });
+
     await t('zoom while playing: ytdec again with the other mode at the clock, no error; same mode does nothing', async () => {
         await sleep(300); fs.writeFileSync(ytlog, ''); setMode('ok');
         await playing();
@@ -739,6 +840,8 @@ async function main() {
         await waitUntil(() => ytdecLines().filter((l) => / argv /.test(l)).length === 2);
         const argv = ytdecLines().filter((l) => / argv /.test(l));
         assert.ok(!/--fill/.test(argv[0]) && /--rect 1280x720 --fill /.test(argv[1]), argv.join('\n'));
+        // (the new ytdec reads its seek after its argv line: wait for it, not a fixed moment)
+        await waitUntil(() => ytdecLines().some((l) => / in seek 40\d\d$/.test(l)), 2000).catch(() => {});
         assert.ok(ytdecLines().some((l) => / in seek 40\d\d$/.test(l)), 'at the clock');
         c.send({ cmd: 'fill', on: true });
         await sleep(300);
