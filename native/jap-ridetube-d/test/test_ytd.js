@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 process.env.MGU_YT_SOCKS = '';   // RideTube VPN: no proxy probing of this computer's 127.0.0.1:1065 (test_socks.js covers it)
-const { Daemon, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable } = require('../ytd.js');
+const { Daemon, measureRequest, pruneCache, listCache, feedItems, feedShelves, pickFetchUid, fetchRequest, isPlayable } = require('../ytd.js');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ytd-'));
 const cache = path.join(tmp, 'cache');
@@ -1390,6 +1390,84 @@ async function main() {
         c.send({ cmd: 'status' });
         const st = await c.waitFor((x) => x.ev === 'state');
         assert.strictEqual(st.version, comp.version);
+    });
+
+    await t('Settings page: netinfo says the way (VPN or not, the uplink) and the last video\'s rate; speedtest: the best of three response times, then the download', async () => {
+        const saved = { measure: d.opts.measure, lease: d.opts.leaseFile, socks: d.socksUp, opt: d.opts.socks };
+        const lease = path.join(tmp, 'lease.json');
+        fs.writeFileSync(lease, JSON.stringify({ interface: 'wwan0' }));
+        d.opts.leaseFile = lease; d.opts.socks = '127.0.0.1:1065'; d.socksUp = true;
+        // the video being fetched: 3 s after its first progress, 1.5 MB more and 12 s more of video
+        const now0 = Date.now, t0 = now0();
+        let at = t0;
+        Date.now = () => at;
+        d.cur = { id: 'RATERATE001', height: 720 }; d.fetchedMs = 4000;
+        d.rate(500000);
+        at = t0 + 1000; d.fetchedMs = 8000; d.rate(900000);
+        assert.ok(!d.videoRate, 'under 2 s: not yet');
+        at = t0 + 3000; d.fetchedMs = 16000; d.rate(2000000);
+        Date.now = now0;
+        assert.deepStrictEqual(d.videoRate, { mbps: 4, x: 4, height: 720 });
+        d.cur = null;
+        c.clear();
+        c.send({ cmd: 'netinfo' });
+        const n = await c.waitFor((x) => x.ev === 'net');
+        assert.deepStrictEqual(n, { ev: 'net', via: 'vpn', iface: 'wwan0', auto: 480, video: { mbps: 4, x: 4, height: 720 }, speed: null, running: false });
+        const asked = [];
+        let pings = [180, 120, 150];
+        d.opts.measure = async (url, maxMs) => {
+            asked.push([url, maxMs]);
+            if (url === d.opts.pingUrl) return { status: 204, bytes: 0, ms: 200, ttfbMs: pings.shift() };
+            return { status: 200, bytes: 9000000, ms: 8200, ttfbMs: 200 };
+        };
+        c.clear();
+        c.send({ cmd: 'speedtest' });
+        const run = await c.waitFor((x) => x.ev === 'net' && x.running);
+        assert.strictEqual(run.speed, null);
+        const done = await c.waitFor((x) => x.ev === 'net' && !x.running);
+        assert.deepStrictEqual(asked.map((a) => a[1]), [0, 0, 0, d.opts.speedMs]);
+        assert.strictEqual(asked[3][0], d.opts.speedUrl);
+        assert.strictEqual(done.speed.pingMs, 120);
+        assert.strictEqual(done.speed.mbps, 9);
+        assert.strictEqual(done.speed.mb, 9);
+        assert.ok(!done.speed.error);
+        // no answer: the error, said once
+        d.opts.measure = async () => { throw new Error('timeout'); };
+        c.clear();
+        c.send({ cmd: 'speedtest' });
+        const bad = await c.waitFor((x) => x.ev === 'net' && !x.running);
+        assert.strictEqual(bad.speed.error, 'no answer');
+        assert.strictEqual(bad.via, 'vpn');
+        d.socksUp = false;
+        c.send({ cmd: 'netinfo' });
+        assert.strictEqual((await c.waitFor((x) => x.ev === 'net' && x.via === 'direct')).iface, 'wwan0');
+        Object.assign(d.opts, { measure: saved.measure, leaseFile: saved.lease, socks: saved.opt }); d.socksUp = saved.socks;
+    });
+
+    await t('measureRequest: the body counted, not kept; cut at maxMs; the time to the answer\'s head', async () => {
+        const https = require('https'), cp = require('child_process');
+        const kd = path.join(tmp, 'tls');
+        fs.mkdirSync(kd);
+        try {
+            cp.execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(kd, 'k.pem'), '-out', path.join(kd, 'c.pem'),
+                '-days', '1', '-subj', '/CN=localhost'], { stdio: 'ignore' });
+        } catch (e) { console.log('skip measureRequest (no openssl)'); return; }
+        const srv = https.createServer({ key: fs.readFileSync(path.join(kd, 'k.pem')), cert: fs.readFileSync(path.join(kd, 'c.pem')) }, (req, res) => {
+            if (req.url === '/204') { res.writeHead(204); res.end(); return; }
+            res.writeHead(200);
+            let n = 0;
+            const send = () => { if (n++ < 400 && !res.destroyed) { res.write(Buffer.alloc(65536)); setTimeout(send, 5); } else res.end(); };
+            send();
+        });
+        await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+        const base = 'https://127.0.0.1:' + srv.address().port, tls = { rejectUnauthorized: false };
+        const p = await measureRequest(base + '/204', 0, 3000, null, null, tls);
+        assert.strictEqual(p.status, 204); assert.strictEqual(p.bytes, 0); assert.ok(p.ttfbMs >= 0 && p.ttfbMs <= p.ms);
+        const m = await measureRequest(base + '/big', 400, 5000, null, null, tls);
+        assert.strictEqual(m.status, 200);
+        assert.ok(m.bytes > 65536 && m.bytes < 400 * 65536, 'cut before the end: ' + m.bytes);
+        assert.ok(m.ms >= 400 && m.ms < 2000, 'at maxMs: ' + m.ms);
+        srv.close();
     });
 
     c.destroy();

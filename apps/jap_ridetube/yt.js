@@ -83,7 +83,7 @@ class Ctl {
 
 const ACTIVE = ['preparing', 'playing', 'paused'];
 // the service this app needs (VPN build: the picture's wait past the video fetched, 0.3.12; its version said, 0.3.13)
-const SERVICE_NEED = '0.3.14';
+const SERVICE_NEED = '0.3.15';
 const older = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
 
 class Model {
@@ -114,6 +114,8 @@ class Model {
         this.toast = null;           // {text, until}: a skipped sponsor
         this.chans = null;           // the subscribed channels: {items:[{id,title,handle}], loading, error, t}
         this.chan = null;            // the channel page shown: {id, title, items, shelves, loading, error, t}
+        this.height = null;          // the playing video's height (service 0.3.15 on; null: not said)
+        this.net = null;             // the Settings page: {via, iface, auto, video, speed, running} (netinfo, speedtest)
         this.rev = 0;                // bumped on every change the screens show
     }
     active() { return ACTIVE.indexOf(this.state) >= 0; }
@@ -150,6 +152,7 @@ class Model {
             if (typeof m.pct === 'number') this.pct = m.pct;
             this.buffering = m.buffering === true;
             this.service = typeof m.version === 'string' ? m.version : 'old';
+            this.height = typeof m.height === 'number' ? m.height : null;
             // another video than the one asked (the daemon's own, after an app restart): title and channel from a list;
             // either way the daemon's title wins unless it is only the id (said while preparing)
             if (m.id !== undefined && m.id !== this.id) { const r = this.item(m.id); this.id = m.id; this.title = r ? String(r.title || '') : ''; this.channel = r ? String(r.channel || '') : ''; }
@@ -160,6 +163,9 @@ class Model {
             if (this.state === 'idle' || (was !== 'preparing' && this.state === 'preparing')) { this.elapsed = 0; this.total = 0; this.fetched = null; }
             // a fresh ytdec starts with video on: tell it again where we are
             if (this.state === 'playing' && was !== 'playing' && was !== 'paused') { this.videoOn = null; this._video(); }
+        } else if (m.ev === 'net') {
+            this.net = { via: m.via === 'vpn' ? 'vpn' : 'direct', iface: typeof m.iface === 'string' ? m.iface : null, auto: typeof m.auto === 'number' ? m.auto : null,
+                video: m.video && typeof m.video.mbps === 'number' ? m.video : null, speed: m.speed && typeof m.speed === 'object' ? m.speed : null, running: m.running === true };
         } else if (m.ev === 'auth') {
             this.auth = { state: String(m.state || 'signed_out'), code: m.code ? String(m.code) : null, url: typeof m.url === 'string' ? m.url : null, msg: m.msg ? String(m.msg) : null };
             if (this.auth.state !== 'signed_in') { this.feeds = {}; this.chans = null; this.chan = null; this._prune(); }   // signed out: nobody's feed left on screen
@@ -319,6 +325,14 @@ class Model {
         return any;
     }
     stop() { return this.active() ? this.send({ cmd: 'stop' }) : false; }
+    /** the Settings page: how the videos come (net event); a speed check (net events: running, then its result) */
+    netInfo() { return this.connected ? this.send({ cmd: 'netinfo' }) : false; }
+    speedTest() {
+        if (!this.connected || (this.net && this.net.running)) return false;
+        this.net = Object.assign({}, this.net || { via: null, iface: null, auto: null, video: null }, { running: true });
+        this._changed();
+        return this.send({ cmd: 'speedtest' });
+    }
     /** while playing: the same video again at this quality, from where it is */
     quality(q) { return this.active() ? this.send({ cmd: 'quality', quality: q }) : false; }
     /** fill (crop to the screen) or fit (the whole picture) for the playing video */

@@ -2,7 +2,7 @@
   "id": "jap_ridetube",
   "title": "RideTube",
   "description": "Video in the car: an unofficial client for YouTube. Your Home, Subscriptions and Watch later (signed in on the car), search, channels and chapters; the sound through the car's media player, the picture only while parked (a podcast view while driving). Needs the jap-ridetube-d tool. VPN build (planetapokera2-debug/ridetube-vpn, modified): in Russian, the feeds too; the knob turns through the videos one by one; a pause when leaving the app; the 12 V battery pause off by default.",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "license": "GPL-3.0-or-later",
   "vendor": "custom",
   "loggingId": "OAA6",

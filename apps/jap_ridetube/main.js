@@ -48,6 +48,7 @@ const { tr, short } = require('./tr');
 const Parked = require('./kit/parked');
 const { Ctl, Model, clock, SERVICE_NEED, SOCKET, FEEDS, SHELF_MAX } = require('./yt');
 const { spell } = require('./speller');
+const { listSheet } = require('./kit/sheet');
 
 const W = 1600, H = 520;
 const BOX = { x: 12, y: 38, w: 1576, h: 432 };          // the video, in the page's visible part (y 38..520)
@@ -62,7 +63,7 @@ const SEARCH_MS = 8000;                                  // a search with no ans
 const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'].map((x) => tr(x));
 const SLOTS = ['BTN_S1', 'BTN_S2', 'BTN_S3', 'BTN_S4', 'BTN_S5', 'BTN_S6'];
 const TABS = ['home', 'subs', 'wl'];
-const NAMES = { home: tr('Home'), subs: tr('Subscriptions'), wl: tr('Watch later'), results: tr('Results') };
+const NAMES = { home: tr('Home'), subs: tr('Subscriptions'), wl: tr('Watch later'), results: tr('Results'), settings: tr('Settings') };
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 
@@ -465,18 +466,24 @@ mgu.run({
         ];
         // while something plays: back to the player (the bar's Now playing, where the kit runs the screen)
         const PLAYING = ['player', 'Playing', (cv, x, y, c) => { [10, 20, 14].forEach((h, k) => cv.roundRect(x - 15 + k * 11, y + 8 - h, 8, h + 8, 2, c)); }];
-        // last: Exit (a power mark), where the kit runs the screen (else the HMI menu's Exit)
+        // last: Settings (a gear) and Exit (a power mark), where the kit runs the screen (else the HMI menu's)
+        const GEAR = ['settings', 'Settings', (cv, x, y, c, bg) => {
+            for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; cv.line(x + Math.cos(a) * 10, y + Math.sin(a) * 10, x + Math.cos(a) * 19, y + Math.sin(a) * 19, 7, c); }
+            cv.circle(x, y, 14, c); cv.circle(x, y, 6, bg);
+        }];
         const EXIT = ['exit', 'Exit', (cv, x, y, c) => { cv.arc(x, y + 2, 13, 16.5, 35, 325, c); cv.line(x, y - 17, x, y - 1, 3.5, c); }];
         function drawRail(cv) {
             const sel = mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode, bottom = H + (cv.own ? cv.extra : 0);
-            const items = cv.own ? RAIL.concat(model.active() ? [PLAYING] : [], [EXIT]) : RAIL;
+            const items = cv.own ? RAIL.concat(model.active() ? [PLAYING] : [], [GEAR, EXIT]) : RAIL;
             const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
+            // seven entries (Playing, Settings, Exit) on 600 px: closer, the lit one's card and the names smaller
+            const bh = Math.min(84, Math.floor(pitch) - 2), fs = pitch < 84 ? 16 : 18, ty = pitch < 84 ? 28 : 34;
             items.forEach(([m, name, glyph], i) => {
                 const cx = 62, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
-                if (on) { cv.roundRect(18, cy - 38, 90, 84, 16, bg); cv.roundRect(18, cy - 14, 5, 28, 2.5, C.red); }
+                if (on) { cv.roundRect(18, cy - 38, 90, bh, 16, bg); cv.roundRect(18, cy - 14, 5, 28, 2.5, C.red); }
                 glyph(cv, cx, cy - 8, c, bg);
-                cv.text(short(name === 'Subscriptions' ? 'Subs' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
-                if (cv.own) cv.target(16, cy - 38, 92, 84, () => (m === 'search' ? ui.open('MAIN') : m === 'exit' ? exit() : show(m)), 'rail:' + m, 16);
+                cv.text(short(name === 'Subscriptions' ? 'Subs' : name), cx, cy + ty, fs, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
+                if (cv.own) cv.target(16, cy - 38, 92, bh, () => (m === 'search' ? ui.open('MAIN') : m === 'exit' ? exit() : m === 'settings' ? openSettings() : show(m)), 'rail:' + m, 16);
             });
         }
 
@@ -779,6 +786,77 @@ mgu.run({
             cv.text(hint, tx, 392 + dy, 26, C.dim, LIT);
             cv.text(tr('The account stays on the car; this app never sees a password'), tx, 440 + dy, 20, '#717171', LIT);
         }
+        /* ---------- Settings (the rail's gear): the video quality, how the videos come and a speed check, the switches
+         * changed most; All settings opens the kit's sheet with the rest ---------- */
+        // the player's Quality button: each press takes the next one, the video is fetched again only 2.5 s after the
+        // last press (pressed past the one wanted, or back to where it was: no wait for nothing)
+        let qTimer = null;
+        function pickQuality(q) {
+            settings.set('quality', q);
+            clearTimeout(qTimer);
+            qTimer = setTimeout(() => { qTimer = null; dirty = true; model.quality(String(settings.get('quality') || 'auto')); }, 2500);
+            wake();
+        }
+        function openSettings() { show('settings'); model.netInfo(); }
+        function allSettings() {
+            const d = ctx.display;
+            const sh = listSheet(settings, null, { version: ctx.spec && ctx.spec.version });
+            sh.settings = true;
+            if (!(d && d.openSheet && d.openSheet(sh))) ui.open('SETTINGS');
+        }
+        const QLABEL = { auto: 'Auto', 720: '720p', 480: '480p', 360: '360p' };
+        const heightOf = (q) => (q === 'auto' ? (model.net && model.net.auto) || null : Number(q));
+        const num = (v) => String(v).replace('.', ',');
+        function chip(cv, key, x, y, w, label, on, fn) {
+            const f = focusKey === key;
+            if (f) cv.roundRect(x - 5, y - 5, w + 10, 74, 22, C.cyan);
+            cv.roundRect(x, y, w, 64, 18, on ? '#ffffff' : C.card);
+            cv.text(fit(cv, label, 26, w - 24, LITB), x + w / 2, y + 42, 26, on ? '#0f0f0f' : '#ffffff', { literal: true, font: 'bold', align: 'center' });
+            if (cv.own) cv.target(x - 5, y - 5, w + 10, 74, fn, key, 18);
+        }
+        function drawSettings(cv) {
+            if (!model.connected) return say(cv, OFF, OFF2);
+            const n = model.net, q = String(settings.get('quality') || 'auto'), x = X0;
+            const head = (t, y) => cv.text(t, x, y, 24, C.dim, LITB);
+            // the quality: the next video's; the one playing again at it only when asked
+            head(tr('Video quality'), TOP + 36);
+            QUALITIES.forEach((v, i) => chip(cv, 'set:q:' + v, x + i * 196, TOP + 52, 180, tr(QLABEL[v]), q === v, () => { settings.set('quality', v); dirty = true; }));
+            let note = q === 'auto' && n && n.auto ? tr('Auto: %sp now (%s)', n.auto, n.auto === 720 ? tr('Wi-Fi') : tr('phone data')) + '. ' : '';
+            note += tr('The next video plays at it');
+            cv.text(fit(cv, note, 22, 1440 - 4 * 196, LIT), x + 4 * 196 + 10, TOP + 92, 22, C.dim, LIT);
+            const want = heightOf(q);
+            if (model.active() && model.height && want && want !== model.height) {
+                chip(cv, 'set:apply', x, TOP + 132, 640, tr('This video at %sp too (loads it again)', want), false, () => { model.quality(q); show('player'); });
+            }
+            // how the videos come, a speed check, how fast the last video came
+            const y2 = TOP + 240;
+            head(tr('Connection'), y2);
+            chip(cv, 'set:speed', x, y2 + 16, 340, n && n.running ? tr('Checking...') : tr('Check speed'), false, () => model.speedTest());
+            const tx = x + 370, sp = n && n.speed;
+            let l1 = tr('Shows how fast the videos can come'), l2 = '';
+            if (n && n.running) { l1 = tr('Checking...'); l2 = tr('About 10 s; the download is not kept'); }
+            else if (sp && sp.error) l1 = tr('The check failed: %s', tr(sp.error));
+            else if (sp && typeof sp.mbps === 'number') {
+                l1 = tr('Speed %s Mbit/s · response %s ms', num(sp.mbps), sp.pingMs);
+                l2 = sp.mbps >= 5 ? tr('Enough for 720p') : sp.mbps >= 2.5 ? tr('Enough for 480p; 720p prepares longer') : tr('Slow: 360p is best');
+            }
+            cv.text(fit(cv, l1, 24, W - tx - 30, LIT), tx, y2 + 40, 24, sp && sp.error ? C.amber : '#ffffff', LIT);
+            if (l2) cv.text(fit(cv, l2, 22, W - tx - 30, LIT), tx, y2 + 72, 22, C.dim, LIT);
+            const way = !n ? '' : (n.via === 'vpn' ? tr('Videos come through the VPN') : tr('Videos come directly, without the VPN')) +
+                (n.iface ? ' · ' + tr(/^wlan/.test(n.iface) ? 'internet over Wi-Fi' : 'internet over phone data') : '');
+            if (way) cv.text(fit(cv, way, 22, W - x - 30, LIT), x, y2 + 118, 22, C.dim, LIT);
+            if (n && n.video) {
+                cv.text(fit(cv, tr('The last video%s came %s× faster than it plays (%s Mbit/s)', n.video.height ? ' (' + n.video.height + 'p)' : '', num(n.video.x), num(n.video.mbps)),
+                    22, W - x - 30, LIT), x, y2 + 148, 22, n.video.x >= 1.5 ? C.dim : C.amber, LIT);
+            }
+            // the switches changed most, then the rest; the versions on the right of the heading
+            const y3 = TOP + 430, lv = settings.get('stop_on_leave') !== false, fl = settings.get('fill') !== false;
+            head(tr('Other'), y3);
+            cv.text(tr('App %s · service %s', ctx.spec && ctx.spec.version, model.service && model.service !== 'old' ? model.service : '?'), W - 30, y3, 20, '#717171', { literal: true, align: 'right' });
+            chip(cv, 'set:leave', x, y3 + 16, 430, tr('Pause on leaving: %s', tr(lv ? 'on' : 'off')), lv, () => { settings.set('stop_on_leave', !lv); dirty = true; });
+            chip(cv, 'set:fill', x + 450, y3 + 16, 430, tr('Fill the screen: %s', tr(fl ? 'on' : 'off')), fl, () => { settings.set('fill', !fl); model.fill(!fl); dirty = true; });
+            chip(cv, 'set:all', x + 900, y3 + 16, 330, tr('All settings'), false, () => allSettings());
+        }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');
             cv.fillRect(BOX.x, BOX.y, BOX.w, BOX.h, '#000000');
@@ -994,9 +1072,9 @@ mgu.run({
                 skip('ov:ff', cx + 210, 1, 10000);
                 // right: Video quality (a press takes the next one; the video starts again there) and zoom (fill crops)
                 const qv = String(settings.get('quality') || 'auto'), fl = settings.get('fill') !== false, qx = SW - 330, zx = SW - 150;
-                ctl('ov:q', qx, cy, 42, () => { const q = QUALITIES[(QUALITIES.indexOf(qv) + 1) % QUALITIES.length]; settings.set('quality', q); model.quality(q); },
+                ctl('ov:q', qx, cy, 42, () => pickQuality(QUALITIES[(QUALITIES.indexOf(qv) + 1) % QUALITIES.length]),
                     (c) => cv.text(qv === 'auto' ? tr('Auto') : qv + 'p', qx, cy + 8, 22, c, { literal: true, font: 'bold', align: 'center' }));
-                cv.text(tr('Quality'), qx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
+                cv.text(qTimer ? tr('In a moment...') : tr('Quality'), qx, cy + 76, 22, '#dddddd', { literal: true, align: 'center' });
                 ctl('ov:zoom', zx, cy, 42, () => { settings.set('fill', !fl); model.fill(!fl); }, (c) => {
                     cv.strokeRoundRect(zx - 22, cy - 15, 44, 30, 4, 3, c);
                     if (fl) cv.fillRect(zx - 22, cy - 15, 44, 30, c); else cv.fillRect(zx - 12, cy - 15, 24, 30, c);
@@ -1060,7 +1138,7 @@ mgu.run({
                 if (mode === 'player' && cv.own && cv.place && cv.place.full) drawFull(cv);
                 else {
                     if (browsing()) drawRail(cv);
-                    if (mode === 'player') drawPlayer(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    if (mode === 'player') drawPlayer(cv); else if (mode === 'settings') drawSettings(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
                     if (model.serviceOld() && mode !== 'player') oldService(cv);
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));

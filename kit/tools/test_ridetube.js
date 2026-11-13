@@ -336,14 +336,14 @@ async function appFrames() {
     assert.strictEqual(d.cmds('thumb').length, 0, 'no tiles, no thumbs');
     assert.strictEqual(d.cmds('library').length, 0, 'no library asked');
     // an app updated without its service: a line on the page says which one to update (state events say the version, 0.3.13 on)
-    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.14';
+    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.15';
     d.send({ ev: 'state', state: 'idle' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(said.indexOf(OLDS) >= 0, 'an older service: ' + said.join('|'));
-    d.send({ ev: 'state', state: 'idle', version: '0.3.13' });
-    await sleep(100); said.length = 0; await hu.loopFn();
-    assert.ok(said.some((x) => /: 0\.3\.13 on the car, this app needs 0\.3\.14$/.test(x)), '0.3.13: ' + said.join('|'));
     d.send({ ev: 'state', state: 'idle', version: '0.3.14' });
+    await sleep(100); said.length = 0; await hu.loopFn();
+    assert.ok(said.some((x) => /: 0\.3\.14 on the car, this app needs 0\.3\.15$/.test(x)), '0.3.14: ' + said.join('|'));
+    d.send({ ev: 'state', state: 'idle', version: '0.3.15' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(!said.some((x) => /Update the RideTube service/.test(x)), 'the one it needs: no line');
     console.log('ok   an older service (or one that does not say its version): the page says to update it');
@@ -386,15 +386,49 @@ async function appFrames() {
     const bar = () => disp.buttons().map((b) => b.id);
     const pl = disp.place;
     const keys = () => disp.pageTargets.map((x) => x.key);
+    // hu.loopFn(); RT_SHOTS=<dir>: the page it draws also as <name>.png, and with redo (sends what made it again) in
+    // Russian as <name>-ru.png (a look at a layout without the car)
+    const shot = async (name, redo) => {
+        if (!process.env.RT_SHOTS) return hu.loopFn();
+        const { play } = require(path.join(hu.kitDir, 'record')), { Canvas } = require(path.join(hu.kitDir, 'canvas'));
+        const grab = async (file) => {
+            const op = disp.present;
+            let got = null;
+            disp.present = function (n, cv) { got = cv; return op.apply(this, arguments); };
+            await hu.loopFn();
+            disp.present = op;
+            if (!got) return;
+            const c = new Canvas(got.w, got.h + (got.extra || 0));
+            play(got.words().slice(), c);
+            fs.writeFileSync(path.join(process.env.RT_SHOTS, file + '.png'), c.png());
+        };
+        await grab(name);
+        if (!redo) return undefined;
+        const dict = require(path.join(stage, 'source', 'javascript', 'tr.js')).dict(), ru = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'apps', 'jap_ridetube', 'locale-ru.json'), 'utf8'));
+        Object.assign(dict, ru); redo(); await sleep(100);
+        await grab(name + '-ru');
+        Object.keys(ru).forEach((k) => delete dict[k]); redo(); await sleep(100);
+        return hu.loopFn();
+    };
     if (own && pl && pl.full) {
         assert.deepStrictEqual(bar(), [], 'no bar where the kit runs the screen');
         assert.ok(pl.extra > 0, 'so the page reaches the screen bottom: extra ' + pl.extra);
         assert.deepStrictEqual(frame().vrect, [0, 0, pl.w, pl.h], 'the player: the video over the whole screen at once');
         assert.deepStrictEqual(keys(), ['ov:back', 'ov:qr', 'ov:rw', 'ov:play', 'ov:ff', 'ov:q', 'ov:zoom', 'ov:bar'], 'the overlay controls');
-        // Quality: auto -> 720 (the setting too); zoom: whole picture (default, 0.3.6) -> fill
-        disp.pageTargets.find((t) => t.key === 'ov:q').run();
-        await lastIs(d, { cmd: 'quality', quality: '720' }, 'Quality: the next one');
-        assert.strictEqual(hu.ctx.settings.get('quality'), '720');
+        // Quality: each press the next one (the setting at once), the video fetched again once, 2.5 s after the last
+        // press (0.3.16: pressed past the one wanted, no wait for each); zoom: whole picture (default, 0.3.6) -> fill
+        const nQ = d.cmds('quality').length;
+        for (const want of ['720', '480']) {
+            disp.pageTargets.find((t) => t.key === 'ov:q').run();
+            await hu.loopFn();
+            assert.strictEqual(hu.ctx.settings.get('quality'), want);
+        }
+        await sleep(1500);
+        assert.strictEqual(d.cmds('quality').length, nQ, 'not yet: pressed 1.5 s ago');
+        await until(() => d.cmds('quality').length > nQ, 3000, 'Quality: fetched again after the last press');
+        await sleep(300);
+        assert.deepStrictEqual(d.cmds('quality').slice(nQ), [{ cmd: 'quality', quality: '480' }], 'once, at the last one chosen');
+        speedH({ speedVehicleCentreOfGravity: 0 });          // (the speed read 4 s ago is stale by now: parked again)
         await hu.loopFn();
         disp.pageTargets.find((t) => t.key === 'ov:zoom').run();
         await lastIs(d, { cmd: 'fill', on: true }, 'Zoom: fill the screen');
@@ -843,6 +877,69 @@ async function appFrames() {
         for (let k = 0; k < 40 && !d.cmds('play').some((x) => x.id === 'ZYXWVUTSRQP'); k++) { await sleep(200); await hu.loopFn(); }
         assert.ok(d.cmds('play').some((x) => x.id === 'ZYXWVUTSRQP'), 'the next one in the row plays');
         console.log('ok   autoplay: the next video in the row, 5 s after the end');
+        // Settings: the rail's gear; asks how the videos come; a quality chip changes only the setting (the next video),
+        // This video too fetches it again; Check speed; the switches; the net event drawn
+        d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP', height: 480, version: '0.3.15' });
+        hu.ctx.settings.set('quality', 'auto');
+        hu.handlers.BTN_RESULTS();
+        await sleep(100); await hu.loopFn();
+        const rk0 = keys().filter((k) => /^rail:/.test(k));
+        assert.deepStrictEqual(rk0.slice(-2), ['rail:settings', 'rail:exit'], 'Settings, then Exit, last on the rail: ' + rk0);
+        const nNet = d.cmds('netinfo').length;
+        disp.pageTargets.find((t) => t.key === 'rail:settings').run();
+        await until(() => d.cmds('netinfo').length > nNet, 2000, 'Settings asks how the videos come');
+        const net1 = { ev: 'net', via: 'vpn', iface: 'wwan0', auto: 480, video: { mbps: 3.2, x: 2.5, height: 480 }, speed: null, running: false };
+        d.send(net1);
+        await sleep(100); said.length = 0; await shot('settings', () => d.send(net1));
+        const sk = keys();
+        ['set:q:auto', 'set:q:720', 'set:q:480', 'set:q:360', 'set:speed', 'set:leave', 'set:fill', 'set:all'].forEach((k) => assert.ok(sk.indexOf(k) >= 0, k + ': ' + sk));
+        assert.ok(sk.indexOf('set:apply') < 0, 'auto is 480p now, as the video: nothing to apply');
+        assert.ok(said.some((x) => /Videos come through the VPN/.test(x)), 'the way: ' + said.join('|'));
+        assert.ok(said.some((x) => /2,5× faster than it plays \(3,2 Mbit\/s\)/.test(x)), 'the last video\'s rate: ' + said.join('|'));
+        const nQ2 = d.cmds('quality').length;
+        disp.pageTargets.find((t) => t.key === 'set:q:720').run();
+        await sleep(100); await hu.loopFn();
+        assert.strictEqual(hu.ctx.settings.get('quality'), '720');
+        await sleep(2800);
+        assert.strictEqual(d.cmds('quality').length, nQ2, 'a chip: the next video only, no fetch now');
+        speedH({ speedVehicleCentreOfGravity: 0 });
+        assert.ok(keys().indexOf('set:apply') >= 0, 'the video is 480p: This video too offered');
+        disp.pageTargets.find((t) => t.key === 'set:apply').run();
+        await lastIs(d, { cmd: 'quality', quality: '720' }, 'This video too: fetched again at 720p');
+        await hu.loopFn();
+        assert.ok(keys().indexOf('ov:back') >= 0, 'and the player shown: ' + keys());
+        disp.pageTargets.find((t) => t.key === 'ov:back').run();
+        await hu.loopFn();
+        assert.ok(keys().indexOf('set:speed') >= 0, 'back to Settings');
+        const nSp = d.cmds('speedtest').length;
+        disp.pageTargets.find((t) => t.key === 'set:speed').run();
+        await until(() => d.cmds('speedtest').length > nSp, 2000, 'Check speed');
+        await hu.loopFn();
+        disp.pageTargets.find((t) => t.key === 'set:speed').run();
+        await sleep(100);
+        assert.strictEqual(d.cmds('speedtest').length, nSp + 1, 'running: not asked twice');
+        const net2 = { ev: 'net', via: 'vpn', iface: 'wwan0', auto: 480, video: { mbps: 3.2, x: 2.5, height: 720 }, speed: { pingMs: 140, mbps: 7.4, mb: 7 }, running: false };
+        d.send(net2);
+        await sleep(100); said.length = 0; await shot('settings-speed', () => d.send(net2));
+        assert.ok(said.some((x) => /Speed 7,4 Mbit\/s · response 140 ms/.test(x)) && said.indexOf('Enough for 720p') >= 0, said.join('|'));
+        d.send({ ev: 'net', via: 'direct', iface: 'wlan0', auto: 720, speed: { error: 'no answer' }, running: false });
+        await sleep(100); said.length = 0; await hu.loopFn();
+        assert.ok(said.some((x) => /The check failed: no answer/.test(x)) && said.some((x) => /without the VPN · internet over Wi-Fi/.test(x)), said.join('|'));
+        const lv0 = hu.ctx.settings.get('stop_on_leave') !== false;
+        disp.pageTargets.find((t) => t.key === 'set:leave').run();
+        assert.strictEqual(hu.ctx.settings.get('stop_on_leave') !== false, !lv0, 'Pause on leaving switched');
+        disp.pageTargets.find((t) => t.key === 'set:leave').run();
+        const nFill = d.cmds('fill').length, fl0 = hu.ctx.settings.get('fill') !== false;
+        disp.pageTargets.find((t) => t.key === 'set:fill').run();
+        await until(() => d.cmds('fill').length > nFill, 2000, 'Fill the screen: the playing video too');
+        assert.strictEqual(hu.ctx.settings.get('fill') !== false, !fl0);
+        hu.ctx.settings.set('fill', fl0);
+        disp.pageTargets.find((t) => t.key === 'set:all').run();
+        await sleep(50);
+        assert.ok(disp.sheet && disp.sheet.settings, 'All settings: the settings sheet');
+        disp.closeSheet();
+        hu.ctx.settings.set('quality', 'auto');
+        console.log('ok   Settings page: quality for the next video (this one only when asked), the way and the speed check, the switches');
         // Exit: the last on the rail and in the HMI menu; the video stops (the daemon releases the sound), the screens close
         d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP' });
         hu.handlers.BTN_RESULTS();
@@ -937,13 +1034,13 @@ function serviceVersion() {
     assert.strictEqual(m.serviceOld(), null, 'not said yet: no warning');
     m.onMsg({ ev: 'state', state: 'idle' });
     assert.strictEqual(m.serviceOld(), 'old', 'a state event without a version: an older service');
-    [['0.3.12', '0.3.12'], ['0.3.13', '0.3.13'], ['0.3.14', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
+    [['0.3.12', '0.3.12'], ['0.3.14', '0.3.14'], ['0.3.15', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
         m.onMsg({ ev: 'state', state: 'idle', version: v });
         assert.strictEqual(m.serviceOld(), want, v);
     });
     m.setConnected(false);
     assert.strictEqual(m.serviceOld(), null, 'not connected: the other notice');
-    console.log('ok   the service version: older than 0.3.14 (or not said) is old');
+    console.log('ok   the service version: older than 0.3.15 (or not said) is old');
 }
 
 function channelSearch() {

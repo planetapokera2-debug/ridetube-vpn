@@ -19,7 +19,7 @@ const readline = require('readline');
 const socksLib = require('./socks');
 
 // said in every state event: the app tells the owner when the service is older than it needs (component.json's; a test checks)
-const VERSION = '0.3.14';
+const VERSION = '0.3.15';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
 const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
@@ -60,6 +60,12 @@ function defaults() {
         warmMs: 600000,      // ... for this long after the app's last command
         infoMaxMs: 1500000,
         leaseFile: '/run/mgu-uplink/lease.json',
+        // the app's Settings page, Check speed: the response time of YouTube, then a download for speedMs, both as the
+        // fetch uid and through the VPN while it is up (the way the videos come)
+        pingUrl: 'https://www.youtube.com/generate_204',
+        speedUrl: 'https://speed.cloudflare.com/__down?bytes=50000000',
+        speedMs: 8000,
+        measure: null,       // null: in a child as the fetch uid (measureRequest); tests: a function (url, maxMs)
         // RideTube VPN: the local SOCKS5 proxy, used while it listens (probed every socksProbeMs); '' - never
         socks: env.MGU_YT_SOCKS !== undefined ? env.MGU_YT_SOCKS : socksLib.DEFAULT,
         socksProbeMs: 5000,
@@ -282,7 +288,8 @@ function fetchRequest(o, uid, req) {
             try { r = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) { /* none */ }
             if (!r) return finish(new Error('fetch helper gave no answer'));
             if (r.error) return finish(new Error(r.error));
-            return finish(null, { status: r.status, body: String(r.body) });
+            // (a measure: its timing, no body)
+            return finish(null, r.bytes !== undefined ? { status: r.status, bytes: r.bytes, ms: r.ms, ttfbMs: r.ttfbMs } : { status: r.status, body: String(r.body) });
         });
         child.stdin.end(JSON.stringify(req));
     });
@@ -344,6 +351,39 @@ function httpsRequest(method, url, headers, body, timeoutMs, via) {
         req.on('error', fail);
         if (data) req.write(data);
         req.end();
+    });
+}
+
+// a GET for its timing only: {status, bytes, ms (the request's start to its end), ttfbMs (to the answer's head)}; the
+// body is counted, not kept, and cut at maxMs (a download speed). socks as ytRequest; tls: options for https.request
+function measureRequest(url, maxMs, timeoutMs, lookup, socks, tls) {
+    const u = require('url').parse(url), t0 = Date.now(), port = Number(u.port) || 443;
+    const sockP = socks ? socksLib.connectTls(socks, u.hostname, port, timeoutMs || 10000) : Promise.resolve(null);
+    return sockP.then(function (sock) {
+        return new Promise(function (resolve, reject) {
+            const o = Object.assign({ hostname: u.hostname, port: port, path: u.path, method: 'GET', headers: { 'User-Agent': TV_UA } }, tls || {});
+            if (sock) { o.agent = new https.Agent({ keepAlive: false }); o.agent.createConnection = function () { return sock; }; } else if (lookup) o.lookup = lookup;
+            let done = false, bytes = 0, ttfb = null, status = 0, cut = null;
+            const end = function (e) {
+                if (done) return;
+                done = true;
+                clearTimeout(timer); clearTimeout(cut);
+                try { req.abort(); } catch (x) { /* gone */ }
+                if (sock) sock.destroy();
+                if (e) reject(e); else resolve({ status: status, bytes: bytes, ms: Date.now() - t0, ttfbMs: ttfb });
+            };
+            const req = https.request(o, function (res) {
+                status = res.statusCode;
+                ttfb = Date.now() - t0;
+                cut = setTimeout(function () { end(null); }, Math.max(0, maxMs || 0));
+                res.on('data', function (c) { bytes += c.length; });
+                res.on('end', function () { end(null); });
+                res.on('error', function (e) { if (ttfb !== null && bytes) end(null); else end(e); });
+            });
+            const timer = setTimeout(function () { end(ttfb !== null ? null : new Error('timeout')); }, timeoutMs || 10000);
+            req.on('error', function (e) { if (!done) end(e); });
+            req.end();
+        });
     });
 }
 
@@ -1109,6 +1149,8 @@ Daemon.prototype.onLine = function (line) {
     case 'video': return this.setVideo(!!m.on);
     case 'fill': return this.setFill(!!m.on);
     case 'quality': return this.requality(m.quality);
+    case 'speedtest': return this.speedTest();
+    case 'netinfo': return this.netInfo();
     case 'auth': return this.account.start();
     case 'auth_status': return this.emit(this.account.status());
     case 'sign_out': return this.account.signOut();
@@ -1125,7 +1167,8 @@ Daemon.prototype.setState = function (s) {
 Daemon.prototype.sendState = function (pct) {
     this.buffering = this.isBuffering();
     const o = { ev: 'state', state: this.state, pct: pct === undefined ? (this.state === 'preparing' ? this.pct || 0 : null) : pct,
-        id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering, version: VERSION };
+        id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering, version: VERSION,
+        height: this.cur && this.cur.height ? this.cur.height : null };
     this.emit(o);
 };
 // playing ahead of the video fetched so far, while the fetcher still writes it
@@ -1424,6 +1467,7 @@ Daemon.prototype.fetchVideo = function (id, dir) {
             }
             else if (m.ev === 'video') {
                 this.fetchedMs = Number(m.ms) || 0;
+                this.rate(Number(m.bytes) || 0);
                 if (audio || head !== null) pct(70 + 29 * Math.min(1, this.fetchedMs / this.opts.startVideoMs));
             } else if (m.ev === 'done') done = true;
             else if (m.ev === 'error') err = String(m.msg);
@@ -1631,6 +1675,53 @@ Daemon.prototype.onPlayerState = function (v) {
         this.setState('paused');
     }
 };
+// ---- the app's Settings page: how the videos come (the VPN or not, the uplink), how fast the last one came, a speed check
+// the video being fetched: its bytes and media time over the wall time, from its first progress on (the stream lookup before
+// it is not the link's); kept for netinfo
+Daemon.prototype.rate = function (bytes) {
+    const now = Date.now(), c = this.cur;
+    if (!c) return;
+    if (!c.rate0 || bytes < c.rate0.b) { c.rate0 = { t: now, b: bytes, ms: this.fetchedMs }; return; }
+    const dt = now - c.rate0.t;
+    if (dt < 2000) return;
+    this.videoRate = { mbps: Math.round((bytes - c.rate0.b) * 8 / dt / 100) / 10, x: Math.round((this.fetchedMs - c.rate0.ms) / dt * 10) / 10, height: c.height || null };
+};
+Daemon.prototype.netInfo = function () {
+    const lease = readJson(this.opts.leaseFile) || {};
+    this.emit({ ev: 'net', via: this.socks() ? 'vpn' : 'direct', iface: typeof lease.interface === 'string' ? lease.interface : null, auto: qualityHeight('auto', lease),
+        video: this.videoRate || null, speed: this.lastSpeed || null, running: !!this.speedRunning });
+};
+Daemon.prototype.measure = function (url, maxMs) {
+    if (this.opts.measure) return this.opts.measure(url, maxMs);
+    return this.fetch({ method: 'GET', url: url, measure: true, maxMs: maxMs, timeoutMs: maxMs + 10000 });
+};
+// the response time: the best of three (a connection each: the name, the VPN, TLS); the speed: a download for speedMs
+Daemon.prototype.speedTest = async function () {
+    if (this.speedRunning) return this.netInfo();
+    this.speedRunning = true;
+    this.netInfo();
+    const r = { at: Date.now() };
+    try {
+        let best = null;
+        for (let i = 0; i < 3; i++) {
+            const p = await this.measure(this.opts.pingUrl, 0);
+            if (p.status >= 200 && p.status < 400 && (best === null || p.ttfbMs < best)) best = p.ttfbMs;
+        }
+        if (best === null) throw new Error('YouTube does not answer');
+        r.pingMs = best;
+        const d = await this.measure(this.opts.speedUrl, this.opts.speedMs);
+        if (d.status !== 200 || !d.bytes) throw new Error('the speed test answered ' + d.status);
+        r.mbps = Math.round(d.bytes * 8 / Math.max(1, d.ms - d.ttfbMs) / 100) / 10;
+        r.mb = Math.round(d.bytes / 1e5) / 10;
+    } catch (e) {
+        r.error = e.noUid ? e.message : e.message === 'timeout' ? 'no answer' : e.message;
+    }
+    this.log('speed: ' + JSON.stringify(r));
+    this.lastSpeed = r;
+    this.speedRunning = false;
+    return this.netInfo();
+};
+
 // paused, the player plays again on its own: the car gives the sound back to the last source after a voice
 // input, a call or a navigation prompt (car, 2026-11-13: sound without the picture, the app away). Stopped again
 Daemon.prototype.keepPaused = function (why) {
@@ -1732,7 +1823,7 @@ Daemon.prototype.close = async function () {
     if (this.server) this.server.close();
 };
 
-module.exports = { VERSION: VERSION, qualityHeight: qualityHeight, channelTiles: channelTiles, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { VERSION: VERSION, measureRequest: measureRequest, qualityHeight: qualityHeight, channelTiles: channelTiles, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
 
 // the uplink's DNS servers (its lease): the system resolver (127.0.0.1) answers no internet names. No
 // lease (uplink down or not installed): the system resolver, as before
@@ -1756,6 +1847,7 @@ if (require.main === module && process.argv[2] === '--fetch') {
     process.stdin.on('end', () => {
         let q;
         try { q = JSON.parse(input); } catch (e) { return out({ error: 'bad request' }); }
+        if (q.measure) return measureRequest(q.url, q.maxMs, q.timeoutMs, q.socks ? undefined : uplinkLookup(), q.socks || null).then(out, (e) => out({ error: e.message }));
         return ytRequest(q.method, q.url, q.headers, q.body, q.timeoutMs, q.socks ? undefined : uplinkLookup(), q.socks || null).then(out, (e) => out({ error: e.message }));
     });
 } else if (require.main === module) {

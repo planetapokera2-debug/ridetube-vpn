@@ -1,5 +1,20 @@
 # Changelog
 
+## App 0.3.16, service 0.3.15 (VPN build, modified version)
+
+- Settings, a gear on the left rail (above Exit), on one page:
+  - Video quality: Auto / 720p / 480p / 360p. A choice is for the next video; the one playing is fetched again only
+    with «Текущее видео тоже в …p (перекачать)», offered when it differs. Auto says what it is now (720p on Wi-Fi,
+    480p on phone data).
+  - Connection: Check speed (YouTube's response time, the best of three, then an 8 s download through the VPN while
+    it is up, nothing kept) with what it is enough for; whether the videos come through the VPN and over Wi-Fi or
+    phone data; how fast the last video came (times faster than it plays, Mbit/s).
+  - Pause on leaving, Fill the screen, All settings (the kit's sheet with the rest); the app's and service's versions.
+- The player's Quality button: each press still takes the next one, but the video is fetched again once, 2.5 s after
+  the last press («Сейчас применится…» meanwhile), so pressing past the one wanted costs no wait.
+- Service: `netinfo` and `speedtest` (`net` events), state events say the playing video's height.
+- Tests: the Settings page, the quality wait; RT_SHOTS=<dir> writes the Settings page as PNG (English and Russian).
+
 ## App 0.3.15, service 0.3.14 (VPN build, modified version)
 
 - Paused, the sound came back on its own about a minute later, the app away (car, 2026-11-13): after a voice input
