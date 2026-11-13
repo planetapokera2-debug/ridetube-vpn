@@ -336,14 +336,14 @@ async function appFrames() {
     assert.strictEqual(d.cmds('thumb').length, 0, 'no tiles, no thumbs');
     assert.strictEqual(d.cmds('library').length, 0, 'no library asked');
     // an app updated without its service: a line on the page says which one to update (state events say the version, 0.3.13 on)
-    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.16';
+    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.17';
     d.send({ ev: 'state', state: 'idle' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(said.indexOf(OLDS) >= 0, 'an older service: ' + said.join('|'));
-    d.send({ ev: 'state', state: 'idle', version: '0.3.15' });
-    await sleep(100); said.length = 0; await hu.loopFn();
-    assert.ok(said.some((x) => /: 0\.3\.15 on the car, this app needs 0\.3\.16$/.test(x)), '0.3.15: ' + said.join('|'));
     d.send({ ev: 'state', state: 'idle', version: '0.3.16' });
+    await sleep(100); said.length = 0; await hu.loopFn();
+    assert.ok(said.some((x) => /: 0\.3\.16 on the car, this app needs 0\.3\.17$/.test(x)), '0.3.16: ' + said.join('|'));
+    d.send({ ev: 'state', state: 'idle', version: '0.3.17' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(!said.some((x) => /Update the RideTube service/.test(x)), 'the one it needs: no line');
     console.log('ok   an older service (or one that does not say its version): the page says to update it');
@@ -387,18 +387,19 @@ async function appFrames() {
     const pl = disp.place;
     const keys = () => disp.pageTargets.map((x) => x.key);
     // hu.loopFn(); RT_SHOTS=<dir>: the page it draws also as <name>.png, and with redo (sends what made it again) in
-    // Russian as <name>-ru.png (a look at a layout without the car)
-    const shot = async (name, redo) => {
+    // Russian as <name>-ru.png (a look at a layout without the car). flat: the full-screen player, drawn in screen
+    // pixels under xf() (which the software replay skips): recorded without the transform, at its logical size
+    const shot = async (name, redo, flat) => {
         if (!process.env.RT_SHOTS) return hu.loopFn();
-        const { play } = require(path.join(hu.kitDir, 'record')), { Canvas } = require(path.join(hu.kitDir, 'canvas'));
+        const { play, Recorder: Rec } = require(path.join(hu.kitDir, 'record')), { Canvas } = require(path.join(hu.kitDir, 'canvas'));
         const grab = async (file) => {
-            const op = disp.present;
+            const op = disp.present, oxf = Rec.prototype.xf;
             let got = null;
             disp.present = function (n, cv) { got = cv; return op.apply(this, arguments); };
-            await hu.loopFn();
-            disp.present = op;
+            if (flat) Rec.prototype.xf = function () { return oxf.call(this, 0, 0, 0); };
+            try { await hu.loopFn(); } finally { disp.present = op; Rec.prototype.xf = oxf; }
             if (!got) return;
-            const c = new Canvas(got.w, got.h + (got.extra || 0));
+            const c = flat ? new Canvas(Math.round(disp.place.w / disp.place.scale), Math.round(disp.place.h / disp.place.scale)) : new Canvas(got.w, got.h + (got.extra || 0));
             play(got.words().slice(), c);
             fs.writeFileSync(path.join(process.env.RT_SHOTS, file + '.png'), c.png());
         };
@@ -571,6 +572,37 @@ async function appFrames() {
         assert.strictEqual(d.cmds('play').slice(-1)[0].id, 'aaa');
         assert.strictEqual(d.cmds('play').slice(-1)[0].quality, 'auto', 'the Video quality setting goes with each play');
         assert.deepStrictEqual(d.cmds('play').slice(-1)[0].skip, ['sponsor', 'selfpromo', 'interaction', 'intro'], 'and the SponsorBlock categories skipped');
+        // sound only (0.3.18): a play started while driving asks for the sound alone; the setting off: the video too
+        assert.strictEqual(d.cmds('play').slice(-1)[0].audio_only, true, 'started while driving: only the sound is asked for');
+        hu.ctx.settings.set('audio_drive', false);
+        d.send({ ev: 'state', state: 'error', id: 'aaa', title: 'Song' }); d.send({ ev: 'error', msg: 'fetch: boom' });
+        await sleep(300); await hu.loopFn();
+        const nPlay2 = d.cmds('play').length;
+        disp.pageTargets.find((t) => t.key === 'ov:play').run();
+        await until(() => d.cmds('play').length > nPlay2, 2000, 'Try again, the setting off');
+        assert.strictEqual(d.cmds('play').slice(-1)[0].audio_only, false, 'Sound only while driving off: the video is fetched as before');
+        hu.ctx.settings.set('audio_drive', true);
+        // the daemon plays it as sound only: moving, the header says why there is no picture and offers nothing
+        d.send({ ev: 'state', state: 'playing', id: 'aaa', title: 'Song', audio_only: true }); d.send({ ev: 'time', elapsed: 21000, total: 200000 });
+        await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(keys().indexOf('ov:getvideo') < 0, 'moving: no Load the video: ' + keys());
+        assert.ok(said.indexOf('Sound only') >= 0 && said.indexOf('The video is not loaded while driving: less data') >= 0, 'the header while moving: ' + said.join('|'));
+        // parked: podcast mode stays (there is no picture to show), now with Load the video
+        speedH({ speedVehicleCentreOfGravity: 0 });
+        const sndState = () => { d.send({ ev: 'state', state: 'playing', id: 'aaa', title: 'Song', audio_only: true }); d.send({ ev: 'time', elapsed: 21000, total: 200000 }); };
+        await sleep(300); said.length = 0; await shot('sound-only', sndState, true);
+        assert.ok(!frame().vrect, 'sound only: no picture when parked either');
+        ['ov:rw', 'ov:play', 'ov:ff', 'ov:getvideo'].forEach((k) => assert.ok(keys().indexOf(k) >= 0, 'parked, sound only: ' + k + ' in ' + keys()));
+        assert.ok(said.indexOf('Load the video') >= 0 && said.indexOf('Sound only') >= 0, said.join('|'));
+        hu.ctx.settings.set('quality', '480');
+        disp.pageTargets.find((t) => t.key === 'ov:getvideo').run();
+        await lastIs(d, { cmd: 'fullvideo', quality: '480' }, 'Load the video: asked at the quality set');
+        hu.ctx.settings.set('quality', 'auto');
+        // the daemon prepares the video (not sound only any more): the usual player, no button
+        d.send({ ev: 'state', state: 'preparing', id: 'aaa', title: 'Song', pct: 10, stage: 'audio', audio_only: false });
+        await sleep(300); await hu.loopFn();
+        assert.ok(keys().indexOf('ov:getvideo') < 0, 'preparing the video: the button is gone: ' + keys());
+        console.log('ok   sound only: a play started while driving asks for the sound alone; parked, Load the video');
         d.send({ ev: 'state', state: 'playing', id: 'aaa', title: 'Song' }); d.send({ ev: 'time', elapsed: 21000, total: 200000 });
         speedH({ speedVehicleCentreOfGravity: 0 });
         await sleep(300); await hu.loopFn();
@@ -883,7 +915,7 @@ async function appFrames() {
         console.log('ok   autoplay: the next video in the row, 5 s after the end');
         // Settings: the rail's gear; asks how the videos come; a quality chip changes only the setting (the next video),
         // This video too fetches it again; Check speed; the switches; the net event drawn
-        d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP', height: 480, version: '0.3.16' });
+        d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP', height: 480, version: '0.3.17' });
         hu.ctx.settings.set('quality', 'auto');
         hu.handlers.BTN_RESULTS();
         await sleep(100); await hu.loopFn();
@@ -893,11 +925,19 @@ async function appFrames() {
         disp.pageTargets.find((t) => t.key === 'rail:settings').run();
         await until(() => d.cmds('netinfo').length > nNet, 2000, 'Settings asks how the videos come');
         const net1 = { ev: 'net', via: 'vpn', iface: 'wwan0', auto: 480, video: { mbps: 3.2, x: 2.5, height: 480 }, speed: null, running: false,
-            prep: { lookup: 6200, audio: 2950, video: 1040, height: 480 } };
+            prep: { lookup: 6200, audio: 2950, video: 1040, height: 480 }, traffic: { today: 123456789, month: 3456789012, since: '2026-11-01' } };
         d.send(net1);
         await sleep(100); said.length = 0; await shot('settings', () => d.send(net1));
         const sk = keys();
-        ['set:q:auto', 'set:q:720', 'set:q:480', 'set:q:360', 'set:speed', 'set:leave', 'set:fill', 'set:diag', 'set:all'].forEach((k) => assert.ok(sk.indexOf(k) >= 0, k + ': ' + sk));
+        ['set:q:auto', 'set:q:720', 'set:q:480', 'set:q:360', 'set:speed', 'set:leave', 'set:fill', 'set:audio', 'set:diag', 'set:all'].forEach((k) => assert.ok(sk.indexOf(k) >= 0, k + ': ' + sk));
+        assert.ok(said.indexOf('Video and sound: today 123 MB · 30 days 3,5 GB') >= 0, 'how much was fetched: ' + said.join('|'));
+        const bottom = Math.max.apply(null, disp.pageTargets.filter((t) => /^set:/.test(t.key)).map((t) => t.y + t.h));
+        const pageBottom = 520 + ((disp.place && disp.place.extra) || 0);       // (the page reaches below its 520 where the kit runs the screen)
+        assert.ok(bottom <= pageBottom, 'every switch within the page: the lowest ends at ' + bottom + ', the page at ' + pageBottom);
+        disp.pageTargets.find((t) => t.key === 'set:audio').run();
+        assert.strictEqual(hu.ctx.settings.get('audio_drive'), false, 'Sound only while driving switched off');
+        disp.pageTargets.find((t) => t.key === 'set:audio').run();
+        assert.strictEqual(hu.ctx.settings.get('audio_drive'), true, 'and on again');
         assert.ok(sk.indexOf('set:apply') < 0, 'auto is 480p now, as the video: nothing to apply');
         assert.ok(said.some((x) => /Videos come through the VPN/.test(x)), 'the way: ' + said.join('|'));
         assert.ok(said.some((x) => /2,5× faster than it plays \(3,2 Mbit\/s\)/.test(x)), 'the last video\'s rate: ' + said.join('|'));
@@ -1044,13 +1084,13 @@ function serviceVersion() {
     assert.strictEqual(m.serviceOld(), null, 'not said yet: no warning');
     m.onMsg({ ev: 'state', state: 'idle' });
     assert.strictEqual(m.serviceOld(), 'old', 'a state event without a version: an older service');
-    [['0.3.12', '0.3.12'], ['0.3.15', '0.3.15'], ['0.3.16', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
+    [['0.3.12', '0.3.12'], ['0.3.16', '0.3.16'], ['0.3.17', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
         m.onMsg({ ev: 'state', state: 'idle', version: v });
         assert.strictEqual(m.serviceOld(), want, v);
     });
     m.setConnected(false);
     assert.strictEqual(m.serviceOld(), null, 'not connected: the other notice');
-    console.log('ok   the service version: older than 0.3.16 (or not said) is old');
+    console.log('ok   the service version: older than 0.3.17 (or not said) is old');
 }
 
 function channelSearch() {

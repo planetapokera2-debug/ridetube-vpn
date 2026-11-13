@@ -1,5 +1,23 @@
 # Changelog
 
+## App 0.3.18, service 0.3.17 (VPN build, modified version)
+
+- Sound only while driving (a setting, on by default): a video started while the car moves (the picture is not shown
+  then anyway) is fetched as its sound alone - about a megabyte a minute instead of five to eight, and it starts
+  without waiting for the video. Parked, the player keeps its podcast look with «Загрузить видео»: the video is
+  fetched then, at the quality set, and plays on from where the sound is (not on its own: every red light would
+  fetch it). A video started while parked is fetched in full, as before. With Video while driving on (a car coded for
+  it) nothing changes.
+- How much was fetched, on the Settings page: «Видео и звук: сегодня … · за 30 дней …» - the sound and the video of
+  every play and the speed check's download, by day, 62 days kept on the car (feeds and thumbnails are not counted).
+- The Settings page fits the screen again: «Текущее видео тоже в …p» sits beside the quality chips, the switches take
+  two rows (the last row was cut at the bottom).
+- Service: `play` takes `audio_only`, `fullvideo` fetches the video of a sound-only play, state events say
+  `audio_only`, `net` events carry `traffic`; ytfetch.py `fetch --audio-only`.
+- Tests: the sound-only play and the traffic counter in the daemon (fake fetcher), the fetcher against YouTube
+  (`--audio-only`: 3.4 MB for 213 s), the app (the play asked while moving, the button, the Settings page);
+  tools/stage_for_tests.sh stages the app for kit/tools/test_ridetube.js; RT_SHOTS draws the full-screen player too.
+
 ## App 0.3.17, service 0.3.16 (VPN build, modified version)
 
 - Preparing says what it is at under the ring: «Ищу видео на YouTube…» (the stream lookup), «Загружаю звук… N %»,

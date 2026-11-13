@@ -1,7 +1,7 @@
 {
   "id": "jap-ridetube-d",
   "kind": "tool",
-  "version": "0.3.16",
+  "version": "0.3.17",
   "license": "GPL-3.0-or-later",
   "title": "RideTube service",
   "description": "The car side of RideTube, an unofficial client for YouTube: yt-dlp (from its official release, run in mgu-python) fetches as the daemon's own internet uid; search, feeds and thumbnails on the car (jap-node22); audio through the BMW MediaPlayer, video decoded by ytdec into the mgu-render video layer; TV device sign-in; controlled by the RideTube app over /run/jap-ridetube-d/ctl.sock. VPN build (planetapokera2-debug/ridetube-vpn, a modified version of JustAnotherPU/ridetube): YouTube through a local SOCKS5 proxy on 127.0.0.1:1065 (bmw-vpn) while one listens, else directly",

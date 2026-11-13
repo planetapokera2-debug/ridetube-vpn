@@ -199,8 +199,11 @@ mgu.run({
             if (list) { const i = list.findIndex((r) => r.id === id); queue = list.slice(i + 1).filter((r) => r && !r.act && /^[\w-]{11}$/.test(r.id)); }
             nextAt = 0;
             if (model.id === id && model.active()) return;
-            model.play(id, rect(), settings.get('fill') !== false, it, { quality: settings.get('quality'), skip: sbSkip() });
+            // driving (the picture is not shown): only the sound is fetched - a megabyte a minute instead of five to eight, no wait for the video
+            model.play(id, rect(), settings.get('fill') !== false, it, { quality: settings.get('quality'), skip: sbSkip(), audio_only: noVideo() && settings.get('audio_drive') !== false });
         }
+        // a sound-only play, the car parked: its video, asked for (not on its own: every red light would fetch it)
+        const loadVideo = () => model.fullVideo(String(settings.get('quality') || 'auto'));
         // from render: ended with a next one -> 5 s to see what comes, then it plays (back to the list cancels)
         function autoNext() {
             if (model.state !== 'ended' || !queue.length || mode !== 'player') { nextAt = 0; return null; }
@@ -819,24 +822,28 @@ mgu.run({
             cv.text(fit(cv, label, 26, w - 24, LITB), x + w / 2, y + 42, 26, on ? '#0f0f0f' : '#ffffff', { literal: true, font: 'bold', align: 'center' });
             if (cv.own) cv.target(x - 5, y - 5, w + 10, 74, fn, key, 18);
         }
+        // bytes as the page says them: under 1 MB, MB, GB with one decimal
+        const size = (b) => (b < 1e6 ? tr('under 1 MB') : b < 1e9 ? tr('%s MB', Math.round(b / 1e6)) : tr('%s GB', num(Math.round(b / 1e8) / 10)));
         function drawSettings(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
             const n = model.net, q = String(settings.get('quality') || 'auto'), x = X0;
             const head = (t, y) => cv.text(t, x, y, 24, C.dim, LITB);
-            // the quality: the next video's; the one playing again at it only when asked
-            head(tr('Video quality'), TOP + 36);
-            QUALITIES.forEach((v, i) => chip(cv, 'set:q:' + v, x + i * 196, TOP + 52, 180, tr(QLABEL[v]), q === v, () => { settings.set('quality', v); dirty = true; }));
-            const auto = q === 'auto' && n && n.auto ? tr('Auto: %sp now (%s)', n.auto, n.auto === 720 ? tr('Wi-Fi') : tr('phone data')) : null;
-            [auto, tr('The next video plays at it')].filter(Boolean).forEach((t, i, all) =>
-                cv.text(fit(cv, t, 22, W - x - 4 * 196 - 40, LIT), x + 4 * 196 + 10, TOP + (all.length > 1 ? 78 + i * 30 : 92), 22, C.dim, LIT));
-            const want = heightOf(q);
-            if (model.active() && model.height && want && want !== model.height) {
-                chip(cv, 'set:apply', x, TOP + 132, 640, tr('This video at %sp too (loads it again)', want), false, () => { model.quality(q); show('player'); });
+            // the quality: the next video's; the one playing again at it only when asked (the chip beside, then)
+            head(tr('Video quality'), TOP + 30);
+            QUALITIES.forEach((v, i) => chip(cv, 'set:q:' + v, x + i * 196, TOP + 44, 180, tr(QLABEL[v]), q === v, () => { settings.set('quality', v); dirty = true; }));
+            const want = heightOf(q), nx = x + 4 * 196 + 10;
+            if (model.active() && !model.audioOnly && model.height && want && want !== model.height) {
+                chip(cv, 'set:apply', nx, TOP + 44, W - nx - 30, tr('This video at %sp too (loads it again)', want), false, () => { model.quality(q); show('player'); });
+            } else {
+                const auto = q === 'auto' && n && n.auto ? tr('Auto: %sp now (%s)', n.auto, n.auto === 720 ? tr('Wi-Fi') : tr('phone data')) : null;
+                [auto, tr('The next video plays at it')].filter(Boolean).forEach((t, i, all) =>
+                    cv.text(fit(cv, t, 22, W - nx - 30, LIT), nx, TOP + (all.length > 1 ? 70 + i * 30 : 84), 22, C.dim, LIT));
             }
-            // how the videos come, a speed check, how fast the last video came
-            const y2 = TOP + 240;
+            // how the videos come, a speed check, how fast the last video came; how much was fetched on the heading's right
+            const y2 = TOP + 146;
             head(tr('Connection'), y2);
-            chip(cv, 'set:speed', x, y2 + 16, 340, n && n.running ? tr('Checking...') : tr('Check speed'), false, () => model.speedTest());
+            if (n && n.traffic) cv.text(tr('Video and sound: today %s · 30 days %s', size(n.traffic.today), size(n.traffic.month)), W - 30, y2, 22, C.dim, { literal: true, align: 'right' });
+            chip(cv, 'set:speed', x, y2 + 14, 340, n && n.running ? tr('Checking...') : tr('Check speed'), false, () => model.speedTest());
             const tx = x + 370, sp = n && n.speed;
             let l1 = tr('Shows how fast the videos can come'), l2 = '';
             if (n && n.running) { l1 = tr('Checking...'); l2 = tr('About 10 s; the download is not kept'); }
@@ -845,25 +852,29 @@ mgu.run({
                 l1 = tr('Speed %s Mbit/s · response %s ms', num(sp.mbps), sp.pingMs);
                 l2 = sp.mbps >= 5 ? tr('Enough for 720p') : sp.mbps >= 2.5 ? tr('Enough for 480p; 720p prepares longer') : tr('Slow: 360p is best');
             }
-            cv.text(fit(cv, l1, 24, W - tx - 30, LIT), tx, y2 + 40, 24, sp && sp.error ? C.amber : '#ffffff', LIT);
-            if (l2) cv.text(fit(cv, l2, 22, W - tx - 30, LIT), tx, y2 + 72, 22, C.dim, LIT);
+            cv.text(fit(cv, l1, 24, W - tx - 30, LIT), tx, y2 + 38, 24, sp && sp.error ? C.amber : '#ffffff', LIT);
+            if (l2) cv.text(fit(cv, l2, 22, W - tx - 30, LIT), tx, y2 + 70, 22, C.dim, LIT);
             const way = !n ? '' : (n.via === 'vpn' ? tr('Videos come through the VPN') : tr('Videos come directly, without the VPN')) +
                 (n.iface ? ' · ' + tr(/^wlan/.test(n.iface) ? 'internet over Wi-Fi' : 'internet over phone data') : '');
-            if (way) cv.text(fit(cv, way, 22, W - x - 30, LIT), x, y2 + 118, 22, C.dim, LIT);
+            if (way) cv.text(fit(cv, way, 22, W - x - 30, LIT), x, y2 + 116, 22, C.dim, LIT);
             if (n && n.video) {
                 cv.text(fit(cv, tr('The last video%s came %s× faster than it plays (%s Mbit/s)', n.video.height ? ' (' + n.video.height + 'p)' : '', num(n.video.x), num(n.video.mbps)),
-                    22, W - x - 30, LIT), x, y2 + 148, 22, n.video.x >= 1.5 ? C.dim : C.amber, LIT);
+                    22, W - x - 30, LIT), x, y2 + 144, 22, n.video.x >= 1.5 ? C.dim : C.amber, LIT);
             }
             const pr = model.prep, sec = (ms) => num(Math.round(ms / 100) / 10);
-            if (pr) cv.text(fit(cv, tr('Last preparing: lookup %s s · sound %s s · video %s s%s', sec(pr.lookup), sec(pr.audio), sec(pr.video), pr.height ? ' (' + pr.height + 'p)' : ''), 22, W - x - 30, LIT), x, y2 + 178, 22, C.dim, LIT);
-            // the switches changed most, then the rest; the versions on the right of the heading
-            const y3 = TOP + 458, lv = settings.get('stop_on_leave') !== false, fl = settings.get('fill') !== false, dg = settings.get('diag') === true;
+            if (pr) {
+                cv.text(fit(cv, pr.audioOnly ? tr('Last preparing: lookup %s s · sound %s s (sound only)', sec(pr.lookup), sec(pr.audio))
+                    : tr('Last preparing: lookup %s s · sound %s s · video %s s%s', sec(pr.lookup), sec(pr.audio), sec(pr.video), pr.height ? ' (' + pr.height + 'p)' : ''), 22, W - x - 30, LIT), x, y2 + 172, 22, C.dim, LIT);
+            }
+            // the switches changed most (two rows), then the rest; the versions on the right of the heading
+            const y3 = TOP + 354, lv = settings.get('stop_on_leave') !== false, fl = settings.get('fill') !== false, dg = settings.get('diag') === true, ad = settings.get('audio_drive') !== false;
             head(tr('Other'), y3);
             cv.text(tr('App %s · service %s', ctx.spec && ctx.spec.version, model.service && model.service !== 'old' ? model.service : '?'), W - 30, y3, 20, '#717171', { literal: true, align: 'right' });
-            chip(cv, 'set:leave', x, y3 + 16, 350, tr('Pause on leaving: %s', tr(lv ? 'on' : 'off')), lv, () => { settings.set('stop_on_leave', settings.get('stop_on_leave') === false); dirty = true; });
-            chip(cv, 'set:fill', x + 366, y3 + 16, 350, tr('Fill the screen: %s', tr(fl ? 'on' : 'off')), fl, () => { const on = settings.get('fill') === false; settings.set('fill', on); model.fill(on); dirty = true; });
-            chip(cv, 'set:diag', x + 732, y3 + 16, 310, tr('Diagnostics: %s', tr(dg ? 'on' : 'off')), dg, () => { settings.set('diag', settings.get('diag') !== true); dirty = true; });
-            chip(cv, 'set:all', x + 1058, y3 + 16, 300, tr('All settings'), false, () => allSettings());
+            chip(cv, 'set:leave', x, y3 + 14, 350, tr('Pause on leaving: %s', tr(lv ? 'on' : 'off')), lv, () => { settings.set('stop_on_leave', settings.get('stop_on_leave') === false); dirty = true; });
+            chip(cv, 'set:fill', x + 366, y3 + 14, 350, tr('Fill the screen: %s', tr(fl ? 'on' : 'off')), fl, () => { const on = settings.get('fill') === false; settings.set('fill', on); model.fill(on); dirty = true; });
+            chip(cv, 'set:audio', x + 732, y3 + 14, 450, tr('Sound only while driving: %s', tr(ad ? 'on' : 'off')), ad, () => { settings.set('audio_drive', settings.get('audio_drive') === false); dirty = true; });
+            chip(cv, 'set:diag', x, y3 + 88, 350, tr('Diagnostics: %s', tr(dg ? 'on' : 'off')), dg, () => { settings.set('diag', settings.get('diag') !== true); dirty = true; });
+            chip(cv, 'set:all', x + 366, y3 + 88, 350, tr('All settings'), false, () => allSettings());
         }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');
@@ -890,6 +901,7 @@ mgu.run({
             } else if (model.state === 'error') mid = tr('Error: %s', model.error || tr('playback stopped'));
             else if (!model.active()) mid = tr(model.state === 'ended' ? 'Finished' : 'Pick a video on Home or Search');
             else if (noVideo()) mid = tr('Video stops while driving - the sound plays on');
+            else if (model.audioOnly) mid = tr('Sound only: this video was started while driving');
             else if (!cv.place || !gpu()) mid = tr('The picture needs the GPU renderer (mgu-render) - the sound plays');
             else if (!videoShown) mid = tr('Starting the picture...');
             else if (loading()) mid = tr('Loading the video up to here: %s of %s', clock(model.fetched || 0), clock(model.elapsed));
@@ -923,10 +935,17 @@ mgu.run({
             cv.fillRect(0, 0, SW, SH, C.bg);
             const x0 = LX + 46, top = 40, ch = model.channel || (model.item(model.id) || {}).channel;
             cv.text('RideTube', x0, top + 30, 34, '#ffffff', LITB);
-            const chip = tr('Podcast mode · driving'), cw = cv.textWidth(chip, 22, LIT) + 40;
+            // sound only (0.3.17): this play was started while driving, its video was not fetched - parked, a button loads it
+            const snd = model.audioOnly, moving = noVideo();
+            const chip = tr(snd ? 'Sound only' : 'Podcast mode · driving'), cw = cv.textWidth(chip, 22, LIT) + 40;
             cv.roundRect(x0 + 170, top, cw, 40, 20, C.ph);
             cv.text(chip, x0 + 170 + cw / 2, top + 28, 22, C.dim, { literal: true, align: 'center' });
-            cv.text(tr('Video returns when parked'), SW - 60, top + 28, 22, '#717171', { literal: true, align: 'right' });
+            if (snd && !moving && live) {
+                const tt = tr('Load the video'), w2 = cv.textWidth(tt, 26, LITB) + 64, gx = SW - 60 - w2, gy = top - 10, f = focusKey === 'ov:getvideo';
+                cv.roundRect(gx, gy, w2, 60, 30, f ? '#3ea6ff' : '#ffffff');
+                cv.text(tt, gx + 32, gy + 40, 26, f ? '#ffffff' : C.bg, LITB);
+                tg(gx, gy, w2, 60, run(loadVideo), 'ov:getvideo', 30);
+            } else cv.text(tr(snd ? 'The video is not loaded while driving: less data' : 'Video returns when parked'), SW - 60, top + 28, 22, '#717171', { literal: true, align: 'right' });
             // laid out from the bottom: the notice / up-next row, the controls, the bar; the artwork takes what is left
             const cy = SH - 178, by = cy - 128, ay = top + 72, ah = Math.max(120, by - 56 - ay), aw = Math.round(ah * 16 / 9), ax = x0;
             const th = model.thumbs[model.id];
@@ -1004,7 +1023,8 @@ mgu.run({
             void cv.extra;
             const tg = (x, y, w, h, run, key, r, turn) => cv.target(x - dx, y - dy, w, h, run, key, r, turn);
             cv.xf(1, 0, 0).fillRect(0, 0, pl.w, pl.h, '#000000');
-            const pod = model.active() && noVideo();   // driving: podcast mode (no picture, big controls, always shown)
+            // driving, or a sound-only play (no picture to show): podcast mode (big controls, always shown)
+            const pod = model.active() && (noVideo() || model.audioOnly);
             if (videoShown && !pod) cv.video(VID, 0, 0, pl.w, pl.h, 0);
             if (!overlay() && !pod) { cv.xf(); OVK.forEach((k) => tg(0, 0, SW, SH, wake, k, 0, k === 'ov:bar' ? turnSeek : undefined)); return; }
             cv.xf(s, 0, 0);

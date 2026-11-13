@@ -868,7 +868,7 @@ def fetch(a):
         json.dump(meta, f)
     os.replace(os.path.join(a.dir, 'meta.json.tmp'), os.path.join(a.dir, 'meta.json'))
     emit(ev='meta', title=meta['title'], duration_s=meta['duration_s'], chapters=meta['chapters'])
-    if not any((x.get('vcodec') or '').startswith('avc1') for x in info.get('formats') or []):
+    if not a.audio_only and not any((x.get('vcodec') or '').startswith('avc1') for x in info.get('formats') or []):
         fail('no avc1 video')
 
     def audio():
@@ -889,6 +889,15 @@ def fetch(a):
             emit(ev='audio_ready', bytes=n)
         except BaseException as e:  # noqa: BLE001
             fail(f'audio: {ya.params["logger"].last or e}')
+
+    if a.audio_only:   # the sound alone: no video download, no demux (the daemon plays it without a picture)
+        ta = threading.Thread(target=audio, daemon=True)
+        ta.start()
+        ta.join()
+        if not done_a:
+            fail('audio: unfinished')
+        emit(ev='done')
+        return 0
 
     rfd, wfd = os.pipe()
     sys.stdout = io.TextIOWrapper(os.fdopen(wfd, 'wb'))  # yt-dlp writes outtmpl '-' to sys.stdout.buffer
@@ -1052,6 +1061,7 @@ def main(argv=None):
     ap.add_argument('dir', nargs='?')
     ap.add_argument('--cache-dir', required=True)
     ap.add_argument('--height', type=int, default=720)
+    ap.add_argument('--audio-only', action='store_true')   # fetch: the sound alone (a play started while driving)
     ap.add_argument('--node', default=NODE)
     ap.add_argument('--lease', default=LEASE)
     ap.add_argument('--pyz')

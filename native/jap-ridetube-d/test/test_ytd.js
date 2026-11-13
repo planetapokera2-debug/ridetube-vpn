@@ -914,6 +914,107 @@ async function main() {
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
     });
 
+    await t('sound only (a play started while driving): the fetcher gets --audio-only, it plays once the sound is there, no ytdec; fullvideo fetches the video; a video here in full plays in full', async () => {
+        await sleep(500);                                           // (the last test's ytdec finishes logging)
+        fs.writeFileSync(ctl, ''); fs.writeFileSync(ytlog, ''); setMode('ok');
+        const id = 'AAAAAAAAAA1', dir = path.join(cache, id);
+        c.clear();
+        c.send({ cmd: 'play', id: id, rect: '1280x720', audio_only: true });
+        const pl = await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
+        assert.strictEqual(pl.audio_only, true);
+        assert.strictEqual(pl.buffering, false);
+        assert.deepStrictEqual(fetchLog().argv.slice(1), ['fetch', '--cache-dir', path.join(cache, 'ytdlp'), '--height', '720', '--audio-only', '--', id, dir]);
+        const prep = c.evs.filter((x) => x.ev === 'state' && x.state === 'preparing');
+        assert.ok(prep.length >= 2 && prep.every((x) => x.audio_only === true && (x.stage === 'lookup' || x.stage === 'audio')), 'preparing: the lookup and the sound only: ' + JSON.stringify(prep.map((x) => [x.pct, x.stage])));
+        assert.strictEqual(prep[prep.length - 1].pct, 50, 'the pct is the sound\'s alone (the fake says 50 %)');
+        const pr = c.evs.filter((x) => x.ev === 'prep');
+        assert.strictEqual(pr.length, 1);
+        assert.ok(pr[0].audio_only === true && pr[0].video === 0 && pr[0].height === null, JSON.stringify(pr[0]));
+        assert.strictEqual(called('playFile').slice(-1)[0].a.path, path.join(dir, 'audio.m4a'));
+        assert.ok(['video.h264', 'video.h264.part', 'index.bin'].every((f) => !fs.existsSync(path.join(dir, f))), 'no video files');
+        await sleep(400);
+        assert.ok(!ytdecLines().some((l2) => / argv --dir /.test(l2)), 'no ytdec for a sound-only play');
+        assert.ok(!d.child);
+        assert.strictEqual(d.fetchedMs, Infinity, 'nothing to wait for');
+        // the video's clock: time events, never buffering; pause and resume work without a decoder
+        subs.playerState('PLAYER_STATE_PLAY');
+        subs.currentItemTime({ elapsed: 5000, total: 600000 });
+        const tm = await c.waitFor((x) => x.ev === 'time');
+        assert.strictEqual(tm.fetched, null);
+        assert.strictEqual(d.isBuffering(), false);
+        // Quality does not fetch a sound-only play again (there is no video to change)
+        c.clear();
+        c.send({ cmd: 'quality', quality: '480' });
+        await sleep(300);
+        assert.ok(!c.evs.some((x) => x.ev === 'state' && x.state === 'preparing'));
+        // the driver asks for the picture (parked): the video is fetched now, at the quality asked
+        c.clear();
+        c.send({ cmd: 'fullvideo', quality: '480' });
+        const pl2 = await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
+        assert.strictEqual(pl2.audio_only, false);
+        const l2 = fetchLog();
+        assert.ok(l2.argv.indexOf('--audio-only') < 0, 'the full fetch: ' + l2.argv.join(' '));
+        assert.strictEqual(l2.argv[l2.argv.indexOf('--height') + 1], '480');
+        await waitUntil(() => ytdecLines().some((x) => / argv --dir /.test(x)));
+        c.clear();
+        c.send({ cmd: 'fullvideo', quality: '480' });            // not sound-only any more: nothing
+        await sleep(300);
+        assert.ok(!c.evs.some((x) => x.ev === 'state' && x.state === 'preparing'));
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+        // a video here in full: played in full even when sound-only was asked (nothing to save)
+        mkVideo('AAAAAAAAAA2');
+        c.clear();
+        c.send({ cmd: 'play', id: 'AAAAAAAAAA2', rect: '1280x720', audio_only: true });
+        assert.strictEqual((await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000)).audio_only, false);
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+    });
+
+    await t('sound only on the head: plays audio.head.m4a at once, audio.m4a switches in; the sound ends -> ended', async () => {
+        fs.writeFileSync(ctl, 'hold');
+        const id = 'AAAAAAAAAA3', dir = path.join(cache, id);
+        c.clear();
+        c.send({ cmd: 'play', id: id, rect: '1280x720', audio_only: true });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
+        assert.strictEqual(called('playFile').slice(-1)[0].a.path, path.join(dir, 'audio.head.m4a'));
+        subs.playerState('PLAYER_STATE_PLAY');
+        subs.currentItemTime({ elapsed: 3000, total: 60000 });
+        fs.writeFileSync(ctl, 'full');
+        await waitUntil(() => called('playFile').slice(-1)[0].a.path === path.join(dir, 'audio.m4a'));
+        await waitUntil(() => !d.fetcher);
+        assert.strictEqual(d.cur.audioOnly, true);
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+    });
+
+    await t('traffic: the sound and the video of a play are counted by day (netinfo: today, 30 days); kept in traffic.json, 62 days', async () => {
+        const before = d.trafficInfo();
+        fs.writeFileSync(ctl, ''); setMode('ok');
+        await fetchPlay('TRAFFICTR01');                             // the fake: 700 bytes of sound, video 1000 then 2500 (running total)
+        await waitUntil(() => d.fetchedMs === 12000);
+        const after = d.trafficInfo();
+        assert.strictEqual(after.today - before.today, 700 + 2500);
+        assert.strictEqual(after.month - before.month, 3200);
+        assert.ok(/^\d{4}-\d\d-\d\d$/.test(after.since), after.since);
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+        const file = path.join(cache, 'traffic.json');
+        await waitUntil(() => fs.existsSync(file));                  // written when the fetch ended
+        assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
+        // a day long ago is outside the 30 days; the file keeps the 62 newest days
+        for (let k = 0; k < 70; k++) d.traffic.days[(1950 + k) + '-06-15'] = { audio: 1, video: 1, other: 0 };
+        assert.strictEqual(d.trafficInfo().month, after.month);
+        d.saveTraffic();
+        const days = Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).days).sort();
+        assert.strictEqual(days.length, 62);
+        assert.ok(days.indexOf(after.since) >= 0 || days[days.length - 1] >= after.since, 'the newest days stay');
+        assert.ok(days.indexOf('1950-06-15') < 0, 'the oldest go');
+        // a daemon started again reads it
+        d.traffic = null;
+        assert.strictEqual(d.trafficInfo().today, after.today);
+    });
+
     await t('auth_status with no account: signed out', async () => {
         c.clear();
         c.send({ cmd: 'auth_status' });
@@ -1428,6 +1529,9 @@ async function main() {
         const n = await c.waitFor((x) => x.ev === 'net');
         assert.ok(n.prep && n.prep.height === 720 && n.prep.lookup >= 100, 'the last preparing\'s parts: ' + JSON.stringify(n.prep));
         delete n.prep;
+        assert.deepStrictEqual(Object.keys(n.traffic), ['today', 'month', 'since'], 'the traffic counter: ' + JSON.stringify(n.traffic));
+        const used = n.traffic.today;
+        delete n.traffic;
         assert.deepStrictEqual(n, { ev: 'net', via: 'vpn', iface: 'wwan0', auto: 480, video: { mbps: 4, x: 4, height: 720 }, speed: null, running: false });
         const asked = [];
         let pings = [180, 120, 150];
@@ -1444,6 +1548,7 @@ async function main() {
         assert.deepStrictEqual(asked.map((a) => a[1]), [0, 0, 0, d.opts.speedMs]);
         assert.strictEqual(asked[3][0], d.opts.speedUrl);
         assert.strictEqual(done.speed.pingMs, 120);
+        assert.strictEqual(done.traffic.today - used, 9000000, 'the speed check\'s download is counted too');
         assert.strictEqual(done.speed.mbps, 9);
         assert.strictEqual(done.speed.mb, 9);
         assert.ok(!done.speed.error);

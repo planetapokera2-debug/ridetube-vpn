@@ -19,7 +19,7 @@ const readline = require('readline');
 const socksLib = require('./socks');
 
 // said in every state event: the app tells the owner when the service is older than it needs (component.json's; a test checks)
-const VERSION = '0.3.16';
+const VERSION = '0.3.17';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
 const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
@@ -132,6 +132,11 @@ function readMeta(dir, id) {
 function isPlayable(dir) {
     const has = (n) => fs.existsSync(path.join(dir, n));
     return has('audio.m4a') && !has('audio.m4a.part') && has('index.bin') && has('video.h264');
+}
+// the sound alone is all there (a video started while driving, 0.3.17): enough for a sound-only play
+function isAudioReady(dir) {
+    const has = (n) => fs.existsSync(path.join(dir, n));
+    return has('audio.m4a') && !has('audio.m4a.part');
 }
 function isReady(dir) {
     let names;
@@ -1141,7 +1146,8 @@ Daemon.prototype.onLine = function (line) {
     case 'status': this.sendState(); if (this.total) this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total }); return undefined;
     case 'search': return this.search(m.q);
     case 'thumb': return this.thumb(m.id);
-    case 'play': return this.play(m.id, m.rect, !!m.fill, m.at, m.quality, m.skip);
+    case 'play': return this.play(m.id, m.rect, !!m.fill, m.at, m.quality, m.skip, m.audio_only === true);
+    case 'fullvideo': return this.fullVideo(m.quality);
     case 'pause': return this.pause();
     case 'resume': return this.resume();
     case 'seek': return this.seek(m.ms);
@@ -1168,7 +1174,8 @@ Daemon.prototype.sendState = function (pct) {
     this.buffering = this.isBuffering();
     const o = { ev: 'state', state: this.state, pct: pct === undefined ? (this.state === 'preparing' ? this.pct || 0 : null) : pct,
         id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering, version: VERSION,
-        height: this.cur && this.cur.height ? this.cur.height : null, stage: this.state === 'preparing' ? this.stage || null : null };
+        height: this.cur && this.cur.height ? this.cur.height : null, stage: this.state === 'preparing' ? this.stage || null : null,
+        audio_only: !!(this.cur && this.cur.audioOnly) };
     this.emit(o);
 };
 // playing ahead of the video fetched so far, while the fetcher still writes it
@@ -1278,7 +1285,11 @@ Daemon.prototype.pruneThumbs = function (tdir) {
 };
 
 // ---- playback
-Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
+// audioOnly (0.3.17): the app says the car is driving and the picture is not shown - only the sound is fetched (a
+// megabyte a minute instead of five to eight, no wait for the video); the video comes with fullVideo() once the driver
+// asks for it, parked.
+// A video already here in full plays as ever.
+Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, audioOnly) {
     if (!ID_RE.test(String(id))) return this.emit({ ev: 'error', msg: 'bad id' });
     if (!/^\d{2,4}x\d{2,4}$/.test(String(rect))) rect = '1280x720';
     await this.stop(null);
@@ -1286,7 +1297,8 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
     const dir = path.join(this.opts.cacheDir, id);
     try { fs.chmodSync(dir, VIDEO_DIR_MODE); } catch (e) { /* not fetched yet: fetchVideo makes it */ }   // (0700 before 0.3.9)
     const meta0 = readMeta(dir, id);
-    this.cur = { id: id, title: meta0.title, durationMs: meta0.duration_s > 0 ? meta0.duration_s * 1000 : undefined, dir: dir, rect: rect, fill: fill, gen: gen, height: qualityHeight(quality, readJson(this.opts.leaseFile)),
+    audioOnly = !!audioOnly && !isPlayable(dir);
+    this.cur = { id: id, audioOnly: audioOnly, title: meta0.title, durationMs: meta0.duration_s > 0 ? meta0.duration_s * 1000 : undefined, dir: dir, rect: rect, fill: fill, gen: gen, height: qualityHeight(quality, readJson(this.opts.leaseFile)),
         skip: Array.isArray(skip) ? skip.filter((x) => typeof x === 'string') : null, chapters: (readJson(path.join(dir, 'meta.json')) || {}).chapters };
     const was = this.positions()[id];
     // where it was left (here, else YouTube's own position the tile carried: at): seek there on the first tick
@@ -1301,7 +1313,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
     this.settle = null;
     this.fullReady = true;
     let headMs = null;
-    if (!isPlayable(dir)) {
+    if (audioOnly ? !isAudioReady(dir) : !isPlayable(dir)) {
         this.fullReady = false;
         this.stage = 'lookup';
         this.setState('preparing');
@@ -1311,7 +1323,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
                 const x = this.extracting;   // its lookup is nearly there: wait for it rather than redo it
                 if (x && x.id === id) await withTimeout(x.done, 8000, 'prefetch').catch(() => undefined);
                 if (gen !== this.gen) return undefined;
-                headMs = await this.fetchVideo(id, dir);
+                headMs = await this.fetchVideo(id, dir, audioOnly);
                 break;
             } catch (e) {
                 if (gen !== this.gen) return undefined;
@@ -1415,17 +1427,18 @@ Daemon.prototype.waitFull = function (ms) {
 // ytfetch.py into a fresh dir; resolves once playable (audio complete or its head, and startVideoMs of video,
 // or all of it), rejects if it ends before. Resolves with the head's ms when it starts on the head only, else null.
 // It keeps writing the video (and the rest of the audio) after that, while we play.
-Daemon.prototype.fetchVideo = function (id, dir) {
+Daemon.prototype.fetchVideo = function (id, dir, audioOnly) {
     return new Promise((resolve, reject) => {
         rmrf(dir); // a killed fetch's leftovers
         mkdirp(dir);
         fs.chmodSync(dir, VIDEO_DIR_MODE);
         this.chownFetch(dir);
         const info = this.freshInfo(id) ? ['--info', this.infoFile(id)] : [];
-        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(info, ['--', id, dir]));
+        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(audioOnly ? ['--audio-only'] : [], info, ['--', id, dir]));
         this.fetcher = child;
         this.preparing = id;
-        this.fetchedMs = 0;
+        this.fetchedMs = audioOnly ? Infinity : 0;   // sound only: no video to wait for
+        let counted = 0;                             // the video's bytes already in the traffic counter
         let audio = false, head = null, done = false, started = false, err = null;
         // what the preparing is at (the app says it under the ring) and how long each part took (the log, the app's
         // Settings page): lookup (yt-dlp: the streams), audio (to the first playable sound), video (to startVideoMs)
@@ -1442,16 +1455,18 @@ Daemon.prototype.fetchVideo = function (id, dir) {
             if (p !== this.pct && this.state === 'preparing') { this.pct = p; this.sendState(); }
         };
         const check = () => {
-            if (!started && (audio || head !== null) && (done || this.fetchedMs >= this.opts.startVideoMs)) {
+            if (!started && (audio || head !== null) && (done || audioOnly || this.fetchedMs >= this.opts.startVideoMs)) {
                 started = true;
                 stage(null);
-                this.lastPrep = { lookup: took.lookup || 0, audio: took.audio || 0, video: took.video || 0, height: this.cur.height || null };
+                this.lastPrep = { lookup: took.lookup || 0, audio: took.audio || 0, video: took.video || 0, height: audioOnly ? null : this.cur.height || null };
+                if (audioOnly) this.lastPrep.audio_only = true;
                 this.log('prepared ' + id + ' in ' + (Date.now() - t0) + ' ms: ' + JSON.stringify(this.lastPrep));
                 this.emit(Object.assign({ ev: 'prep', id: id }, this.lastPrep));
                 resolve(audio ? null : head);
             }
         };
         const end = (why) => {
+            if (this.trafficT) { clearTimeout(this.trafficT); this.trafficT = null; this.saveTraffic(); }   // the fetch is over: its bytes are kept
             if (child === this.fetcher) {
                 this.fetcher = null;
                 this.preparing = null;
@@ -1476,18 +1491,20 @@ Daemon.prototype.fetchVideo = function (id, dir) {
                 if (m.title) this.cur.title = String(m.title);
                 if (m.duration_s > 0) this.cur.durationMs = m.duration_s * 1000;
                 if (Array.isArray(m.chapters)) this.cur.chapters = m.chapters;
-            } else if (m.ev === 'audio') pct(0.7 * (Number(m.pct) || 0));
-            else if (m.ev === 'audio_head' && Number(m.ms) > 0) { if (head === null) { head = Number(m.ms); stage('video'); pct(70); } }
+            } else if (m.ev === 'audio') pct((audioOnly ? 0.99 : 0.7) * (Number(m.pct) || 0));
+            else if (m.ev === 'audio_head' && Number(m.ms) > 0) { if (head === null) { head = Number(m.ms); if (!audioOnly) { stage('video'); pct(70); } } }
             else if (m.ev === 'audio_ready') {
                 audio = true;
-                if (!started) stage('video');
-                pct(70);
+                this.count('audio', Number(m.bytes) || 0);
+                if (!started && !audioOnly) stage('video');
+                if (!audioOnly) pct(70);
                 if (started) this.onFullAudio();
                 else this.fullReady = true;
             }
             else if (m.ev === 'video') {
                 this.fetchedMs = Number(m.ms) || 0;
                 this.rate(Number(m.bytes) || 0);
+                if (Number(m.bytes) > counted) { this.count('video', Number(m.bytes) - counted); counted = Number(m.bytes); }
                 if (audio || head !== null) pct(70 + 29 * Math.min(1, this.fetchedMs / this.opts.startVideoMs));
             } else if (m.ev === 'done') done = true;
             else if (m.ev === 'error') err = String(m.msg);
@@ -1629,9 +1646,16 @@ Daemon.prototype.setFill = function (on) {
     this.spawnYtdec(this.paused || this.headWait ? this.elapsed : this.elapsed + (Date.now() - this.lastTickAt));
 };
 // Video quality while playing: the same video fetched again at that height, from where it is
+// The video of a sound-only play (started while driving): fetched now, played on from where the sound is
+Daemon.prototype.fullVideo = async function (quality) {
+    const c = this.cur;
+    if (!c || !c.audioOnly) return undefined;
+    await this.stop(null);
+    return this.play(c.id, c.rect, c.fill, null, quality, c.skip, false);
+};
 Daemon.prototype.requality = async function (quality) {
     const c = this.cur;
-    if (!c || qualityHeight(quality, readJson(this.opts.leaseFile)) === c.height) return undefined;
+    if (!c || c.audioOnly || qualityHeight(quality, readJson(this.opts.leaseFile)) === c.height) return undefined;
     await this.stop(null);
     rmrf(c.dir);
     return this.play(c.id, c.rect, c.fill, null, quality, c.skip);
@@ -1706,10 +1730,43 @@ Daemon.prototype.rate = function (bytes) {
     if (dt < 2000) return;
     this.videoRate = { mbps: Math.round((bytes - c.rate0.b) * 8 / dt / 100) / 10, x: Math.round((this.fetchedMs - c.rate0.ms) / dt * 10) / 10, height: c.height || null };
 };
+// ---- how much was fetched (0.3.17): the sound and the video of every play, the speed check's download; a day each,
+// 62 days kept (traffic.json beside positions.json). Feeds, searches and thumbnails are not counted (small).
+const DAY_MS = 86400000;
+function dayKey(t) { const d = new Date(t); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+Daemon.prototype.trafficFile = function () { return path.join(this.opts.cacheDir, 'traffic.json'); };
+Daemon.prototype.count = function (kind, bytes) {
+    if (!(bytes > 0)) return;
+    if (!this.traffic) { const j = readJson(this.trafficFile()); this.traffic = j && j.days && typeof j.days === 'object' ? j : { days: {} }; }
+    const k = dayKey(Date.now()), day = this.traffic.days[k] || (this.traffic.days[k] = { audio: 0, video: 0, other: 0 });
+    day[kind === 'audio' || kind === 'video' ? kind : 'other'] += bytes;
+    if (this.trafficT) return;
+    this.trafficT = setTimeout(() => { this.trafficT = null; this.saveTraffic(); }, this.opts.trafficSaveMs === undefined ? 15000 : this.opts.trafficSaveMs);
+    if (this.trafficT.unref) this.trafficT.unref();
+};
+Daemon.prototype.saveTraffic = function () {
+    if (!this.traffic) return;
+    const keys = Object.keys(this.traffic.days).sort();
+    keys.slice(0, Math.max(0, keys.length - 62)).forEach((k) => { delete this.traffic.days[k]; });
+    try {
+        const f = this.trafficFile();
+        fs.writeFileSync(f + '.tmp', JSON.stringify(this.traffic), { mode: 0o600 });
+        fs.renameSync(f + '.tmp', f);
+    } catch (e) { this.log('traffic: ' + e.message); }
+};
+// today and the last 30 days (today among them), bytes: {today, month, sound, since}; since: the first day counted
+Daemon.prototype.trafficInfo = function () {
+    if (!this.traffic) { const j = readJson(this.trafficFile()); this.traffic = j && j.days && typeof j.days === 'object' ? j : { days: {} }; }
+    const now = Date.now(), today = dayKey(now), from = dayKey(now - 29 * DAY_MS), keys = Object.keys(this.traffic.days).sort();
+    const sum = (d) => (d ? (d.audio || 0) + (d.video || 0) + (d.other || 0) : 0);
+    let month = 0;
+    keys.forEach((k) => { if (k >= from && k <= today) month += sum(this.traffic.days[k]); });
+    return { today: sum(this.traffic.days[today]), month: month, since: keys.length ? keys[0] : null };
+};
 Daemon.prototype.netInfo = function () {
     const lease = readJson(this.opts.leaseFile) || {};
     this.emit({ ev: 'net', via: this.socks() ? 'vpn' : 'direct', iface: typeof lease.interface === 'string' ? lease.interface : null, auto: qualityHeight('auto', lease),
-        video: this.videoRate || null, speed: this.lastSpeed || null, running: !!this.speedRunning, prep: this.lastPrep || null });
+        video: this.videoRate || null, speed: this.lastSpeed || null, running: !!this.speedRunning, prep: this.lastPrep || null, traffic: this.trafficInfo() });
 };
 Daemon.prototype.measure = function (url, maxMs) {
     if (this.opts.measure) return this.opts.measure(url, maxMs);
@@ -1730,6 +1787,7 @@ Daemon.prototype.speedTest = async function () {
         if (best === null) throw new Error('YouTube does not answer');
         r.pingMs = best;
         const d = await this.measure(this.opts.speedUrl, this.opts.speedMs);
+        this.count('other', d.bytes || 0);
         if (d.status !== 200 || !d.bytes) throw new Error('the speed test answered ' + d.status);
         r.mbps = Math.round(d.bytes * 8 / Math.max(1, d.ms - d.ttfbMs) / 100) / 10;
         r.mb = Math.round(d.bytes / 1e5) / 10;
@@ -1759,6 +1817,7 @@ Daemon.prototype.onPlaybackError = function (v) {
 // ---- ytdec
 Daemon.prototype.spawnYtdec = function (seekMs) {
     const c = this.cur;
+    if (!c || c.audioOnly) return undefined;      // sound only: no video file to decode
     const args = ['--dir', c.dir, '--rect', c.rect];
     if (c.fill) args.push('--fill');
     args.push('--log', path.join(this.opts.logDir, 'ytdec.log'));
@@ -1839,11 +1898,13 @@ Daemon.prototype.close = async function () {
     this.spare = this.extracting = null;
     this.account.close();
     await this.stop(null);
+    if (this.trafficT) { clearTimeout(this.trafficT); this.trafficT = null; }
+    this.saveTraffic();
     if (this.client) this.client.destroy();
     if (this.server) this.server.close();
 };
 
-module.exports = { VERSION: VERSION, measureRequest: measureRequest, qualityHeight: qualityHeight, channelTiles: channelTiles, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
+module.exports = { VERSION: VERSION, measureRequest: measureRequest, qualityHeight: qualityHeight, channelTiles: channelTiles, Daemon: Daemon, Audio: Audio, Account: Account, feedItems: feedItems, isPlayable: isPlayable, isAudioReady: isAudioReady, feedShelves: feedShelves, ytRequest: ytRequest, uplinkLookup: uplinkLookup, pickFetchUid: pickFetchUid, fetchRequest: fetchRequest, listCache: listCache, pruneCache: pruneCache, isReady: isReady };
 
 // the uplink's DNS servers (its lease): the system resolver (127.0.0.1) answers no internet names. No
 // lease (uplink down or not installed): the system resolver, as before

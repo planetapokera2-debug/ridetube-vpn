@@ -524,6 +524,38 @@ class Online(unittest.TestCase, Pipeline):
         finally:
             shutil.rmtree(tmp)
 
+    def test_fetch_audio_only(self):
+        """--audio-only (a play started while driving, 0.3.17): the sound alone, no video event or file, then done"""
+        tmp = tempfile.mkdtemp(dir=TMP)
+        try:
+            out, cache = os.path.join(tmp, 'out'), os.path.join(tmp, 'cache')
+            os.makedirs(out)
+            lease = os.path.join(tmp, 'lease.json')
+            with open(lease, 'w') as f:
+                json.dump({'dns': ['1.1.1.1']}, f)
+            vid = ytfetch.DEFAULT_CHECK_ID
+            p = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'ytfetch.py'), 'fetch', vid, out, '--audio-only',
+                                '--cache-dir', cache, '--pyz', PYZ, '--node', NODE, '--lease', lease],
+                               capture_output=True, text=True, env={}, cwd='/', timeout=600)
+            evs = [json.loads(x) for x in p.stdout.splitlines()]
+            self.assertEqual((p.returncode, evs[-1]), (0, {'ev': 'done'}), p.stdout[-2000:] + p.stderr[-2000:])
+            kinds = [e['ev'] for e in evs]
+            self.assertEqual(kinds[0], 'meta')
+            self.assertIn('audio_ready', kinds)
+            self.assertNotIn('video', kinds)
+            hd = next((e for e in evs if e['ev'] == 'audio_head'), None)
+            self.assertEqual(sorted(os.listdir(out)), (['audio.head.m4a'] if hd else []) + ['audio.m4a', 'meta.json'])
+            ready = next(e for e in evs if e['ev'] == 'audio_ready')
+            self.assertEqual(ready['bytes'], os.path.getsize(os.path.join(out, 'audio.m4a')), 'the bytes the traffic counter takes')
+            with open(os.path.join(out, 'meta.json')) as f:
+                dur = json.load(f)['duration_s']
+            got = float(subprocess.run([FFPROBE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0',
+                                        os.path.join(out, 'audio.m4a')], capture_output=True, text=True, check=True).stdout)
+            self.assertLess(abs(got - dur), 2.0, 'the whole sound is there')
+            print(f"\n  online, sound only: {ready['bytes']} bytes for {dur} s", file=sys.stderr)
+        finally:
+            shutil.rmtree(tmp)
+
 
 if __name__ == '__main__':
     unittest.main()

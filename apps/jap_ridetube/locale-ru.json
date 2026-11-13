@@ -150,5 +150,15 @@
  "Loading the sound... %s %": "Загружаю звук… %s %",
  "Loading the video... %s %": "Загружаю видео… %s %",
  "Last preparing: lookup %s s · sound %s s · video %s s%s": "Последняя подготовка: поиск %s с · звук %s с · видео %s с%s",
- "Diagnostics: %s": "Диагностика: %s"
+ "Diagnostics: %s": "Диагностика: %s",
+ "Sound only": "Только звук",
+ "Load the video": "Загрузить видео",
+ "The video is not loaded while driving: less data": "В движении видео не загружается: меньше трафика",
+ "Sound only: this video was started while driving": "Только звук: ролик запущен в движении",
+ "Sound only while driving: %s": "В движении только звук: %s",
+ "under 1 MB": "меньше 1 МБ",
+ "%s MB": "%s МБ",
+ "%s GB": "%s ГБ",
+ "Last preparing: lookup %s s · sound %s s (sound only)": "Последняя подготовка: поиск %s с · звук %s с (только звук)",
+ "Video and sound: today %s · 30 days %s": "Видео и звук: сегодня %s · за 30 дней %s"
 }

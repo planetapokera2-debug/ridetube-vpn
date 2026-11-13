@@ -31,5 +31,6 @@
  "Skip data: SponsorBlock (sponsor.ajay.app), CC BY-NC-SA 4.0": "Данные пропусков: SponsorBlock (sponsor.ajay.app), CC BY-NC-SA 4.0",
  "-10 s": "-10 с",
  "+10 s": "+10 с",
- "Diagnostics on the player (yellow lines)": "Диагностика в плеере (жёлтые строки)"
+ "Diagnostics on the player (yellow lines)": "Диагностика в плеере (жёлтые строки)",
+ "Sound only while driving (the video is not loaded: less data)": "В движении только звук (видео не загружается: меньше трафика)"
 }
