@@ -1,5 +1,15 @@
 # Changelog
 
+## App 0.3.17, service 0.3.16 (VPN build, modified version)
+
+- Preparing says what it is at under the ring: «Ищу видео на YouTube…» (the stream lookup), «Загружаю звук… N %»,
+  «Загружаю видео… N %» — before, «Подготовка… 2 %» for ten seconds looked stuck.
+- How long each part of the last preparing took (lookup, sound, video, ms) goes to the log, a `prep` event and the
+  Settings page («Последняя подготовка: поиск 6,2 с · звук 3 с · видео 1 с»): what to make faster, measured in the car.
+- The yellow diagnostic lines on the player are off by default: «Диагностика» on the Settings page (and in all
+  settings) brings them back.
+- The page redraws at once when a setting changes (the settings sheet's too).
+
 ## App 0.3.16, service 0.3.15 (VPN build, modified version)
 
 - Settings, a gear on the left rail (above Exit), on one page:

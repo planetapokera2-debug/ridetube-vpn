@@ -19,7 +19,7 @@ const readline = require('readline');
 const socksLib = require('./socks');
 
 // said in every state event: the app tells the owner when the service is older than it needs (component.json's; a test checks)
-const VERSION = '0.3.15';
+const VERSION = '0.3.16';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
 const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
@@ -1168,7 +1168,7 @@ Daemon.prototype.sendState = function (pct) {
     this.buffering = this.isBuffering();
     const o = { ev: 'state', state: this.state, pct: pct === undefined ? (this.state === 'preparing' ? this.pct || 0 : null) : pct,
         id: this.cur ? this.cur.id : null, title: this.cur ? this.cur.title : null, buffering: this.buffering, version: VERSION,
-        height: this.cur && this.cur.height ? this.cur.height : null };
+        height: this.cur && this.cur.height ? this.cur.height : null, stage: this.state === 'preparing' ? this.stage || null : null };
     this.emit(o);
 };
 // playing ahead of the video fetched so far, while the fetcher still writes it
@@ -1303,6 +1303,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip) {
     let headMs = null;
     if (!isPlayable(dir)) {
         this.fullReady = false;
+        this.stage = 'lookup';
         this.setState('preparing');
         const waits = this.opts.fetchRetryMs || [];
         for (let k = 0; ; k++) {
@@ -1426,12 +1427,29 @@ Daemon.prototype.fetchVideo = function (id, dir) {
         this.preparing = id;
         this.fetchedMs = 0;
         let audio = false, head = null, done = false, started = false, err = null;
+        // what the preparing is at (the app says it under the ring) and how long each part took (the log, the app's
+        // Settings page): lookup (yt-dlp: the streams), audio (to the first playable sound), video (to startVideoMs)
+        const t0 = Date.now(), took = {};
+        const stage = (st) => {
+            if (this.stage === st) return;
+            took[this.stage] = Date.now() - t0 - Object.keys(took).reduce((a, k) => a + took[k], 0);
+            this.stage = st;
+            if (st && this.state === 'preparing') this.sendState();
+        };
+        this.stage = 'lookup';
         const pct = (p) => {
             p = Math.min(99, Math.max(this.pct, Math.round(p)));
             if (p !== this.pct && this.state === 'preparing') { this.pct = p; this.sendState(); }
         };
         const check = () => {
-            if (!started && (audio || head !== null) && (done || this.fetchedMs >= this.opts.startVideoMs)) { started = true; resolve(audio ? null : head); }
+            if (!started && (audio || head !== null) && (done || this.fetchedMs >= this.opts.startVideoMs)) {
+                started = true;
+                stage(null);
+                this.lastPrep = { lookup: took.lookup || 0, audio: took.audio || 0, video: took.video || 0, height: this.cur.height || null };
+                this.log('prepared ' + id + ' in ' + (Date.now() - t0) + ' ms: ' + JSON.stringify(this.lastPrep));
+                this.emit(Object.assign({ ev: 'prep', id: id }, this.lastPrep));
+                resolve(audio ? null : head);
+            }
         };
         const end = (why) => {
             if (child === this.fetcher) {
@@ -1454,13 +1472,15 @@ Daemon.prototype.fetchVideo = function (id, dir) {
             let m;
             try { m = JSON.parse(l); } catch (e) { return; }
             if (m.ev === 'meta') {
+                stage('audio');
                 if (m.title) this.cur.title = String(m.title);
                 if (m.duration_s > 0) this.cur.durationMs = m.duration_s * 1000;
                 if (Array.isArray(m.chapters)) this.cur.chapters = m.chapters;
             } else if (m.ev === 'audio') pct(0.7 * (Number(m.pct) || 0));
-            else if (m.ev === 'audio_head' && Number(m.ms) > 0) { if (head === null) { head = Number(m.ms); pct(70); } }
+            else if (m.ev === 'audio_head' && Number(m.ms) > 0) { if (head === null) { head = Number(m.ms); stage('video'); pct(70); } }
             else if (m.ev === 'audio_ready') {
                 audio = true;
+                if (!started) stage('video');
                 pct(70);
                 if (started) this.onFullAudio();
                 else this.fullReady = true;
@@ -1689,7 +1709,7 @@ Daemon.prototype.rate = function (bytes) {
 Daemon.prototype.netInfo = function () {
     const lease = readJson(this.opts.leaseFile) || {};
     this.emit({ ev: 'net', via: this.socks() ? 'vpn' : 'direct', iface: typeof lease.interface === 'string' ? lease.interface : null, auto: qualityHeight('auto', lease),
-        video: this.videoRate || null, speed: this.lastSpeed || null, running: !!this.speedRunning });
+        video: this.videoRate || null, speed: this.lastSpeed || null, running: !!this.speedRunning, prep: this.lastPrep || null });
 };
 Daemon.prototype.measure = function (url, maxMs) {
     if (this.opts.measure) return this.opts.measure(url, maxMs);

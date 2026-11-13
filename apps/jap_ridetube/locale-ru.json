@@ -145,5 +145,10 @@
  "App %s · service %s": "Приложение %s · служба %s",
  "internet over Wi-Fi": "интернет по Wi-Fi",
  "internet over phone data": "мобильный интернет",
- "Shows how fast the videos can come": "Покажет, с какой скоростью могут качаться видео"
+ "Shows how fast the videos can come": "Покажет, с какой скоростью могут качаться видео",
+ "Looking the video up on YouTube...": "Ищу видео на YouTube…",
+ "Loading the sound... %s %": "Загружаю звук… %s %",
+ "Loading the video... %s %": "Загружаю видео… %s %",
+ "Last preparing: lookup %s s · sound %s s · video %s s%s": "Последняя подготовка: поиск %s с · звук %s с · видео %s с%s",
+ "Diagnostics: %s": "Диагностика: %s"
 }

@@ -336,14 +336,14 @@ async function appFrames() {
     assert.strictEqual(d.cmds('thumb').length, 0, 'no tiles, no thumbs');
     assert.strictEqual(d.cmds('library').length, 0, 'no library asked');
     // an app updated without its service: a line on the page says which one to update (state events say the version, 0.3.13 on)
-    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.15';
+    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.16';
     d.send({ ev: 'state', state: 'idle' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(said.indexOf(OLDS) >= 0, 'an older service: ' + said.join('|'));
-    d.send({ ev: 'state', state: 'idle', version: '0.3.14' });
-    await sleep(100); said.length = 0; await hu.loopFn();
-    assert.ok(said.some((x) => /: 0\.3\.14 on the car, this app needs 0\.3\.15$/.test(x)), '0.3.14: ' + said.join('|'));
     d.send({ ev: 'state', state: 'idle', version: '0.3.15' });
+    await sleep(100); said.length = 0; await hu.loopFn();
+    assert.ok(said.some((x) => /: 0\.3\.15 on the car, this app needs 0\.3\.16$/.test(x)), '0.3.15: ' + said.join('|'));
+    d.send({ ev: 'state', state: 'idle', version: '0.3.16' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(!said.some((x) => /Update the RideTube service/.test(x)), 'the one it needs: no line');
     console.log('ok   an older service (or one that does not say its version): the page says to update it');
@@ -509,14 +509,18 @@ async function appFrames() {
         said.length = 0; await hu.loopFn();
         assert.ok(disp.pageTargets.find((t) => t.key === 'ov:play').w < 300, 'waiting: the overlay stays');
         assert.ok(said.indexOf('Loading the video up to here: 0:12 of 0:40') >= 0, said.join('|'));
-        assert.ok(said.some((x) => /^скорость 0 км\/ч/.test(x)) && said.some((x) => /видео загружено до 0:12 \(ждём\)/.test(x)), 'the diagnostics lines: ' + said.join('|'));
+        assert.ok(!said.some((x) => /^скорость 0 км\/ч/.test(x)), 'the diagnostics: off by default (0.3.17)');
+        hu.ctx.settings.set('diag', true);
+        await sleep(50); said.length = 0; await hu.loopFn();
+        assert.ok(said.some((x) => /^скорость 0 км\/ч/.test(x)) && said.some((x) => /видео загружено до 0:12 \(ждём\)/.test(x)), 'the diagnostics lines (the setting on): ' + said.join('|'));
+        hu.ctx.settings.set('diag', false);
         disp.pageTargets.find((t) => t.key === 'ov:play').run();
         await lastIs(d, { cmd: 'pause' }, 'pause while waiting');
         d.send({ ev: 'state', state: 'playing', id: 'aaa', title: 'Song', buffering: false });
         d.send({ ev: 'time', elapsed: 40000, total: 200000 });
         await sleep(300); said.length = 0; await hu.loopFn();
         assert.ok(said.indexOf('Loading the video up to here: 0:12 of 0:40') < 0, 'fetched: the notice gone');
-        assert.ok(said.some((x) => /видео загружено всё/.test(x)), said.join('|'));
+        assert.ok(!said.some((x) => /видео загружено/.test(x)), 'the diagnostics off again: ' + said.join('|'));
         console.log('ok   waiting for the video: the overlay stays and says how far; play/pause; the diagnostics');
         disp.onTap(800, 300);
         await hu.loopFn();
@@ -879,7 +883,7 @@ async function appFrames() {
         console.log('ok   autoplay: the next video in the row, 5 s after the end');
         // Settings: the rail's gear; asks how the videos come; a quality chip changes only the setting (the next video),
         // This video too fetches it again; Check speed; the switches; the net event drawn
-        d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP', height: 480, version: '0.3.15' });
+        d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP', height: 480, version: '0.3.16' });
         hu.ctx.settings.set('quality', 'auto');
         hu.handlers.BTN_RESULTS();
         await sleep(100); await hu.loopFn();
@@ -888,14 +892,20 @@ async function appFrames() {
         const nNet = d.cmds('netinfo').length;
         disp.pageTargets.find((t) => t.key === 'rail:settings').run();
         await until(() => d.cmds('netinfo').length > nNet, 2000, 'Settings asks how the videos come');
-        const net1 = { ev: 'net', via: 'vpn', iface: 'wwan0', auto: 480, video: { mbps: 3.2, x: 2.5, height: 480 }, speed: null, running: false };
+        const net1 = { ev: 'net', via: 'vpn', iface: 'wwan0', auto: 480, video: { mbps: 3.2, x: 2.5, height: 480 }, speed: null, running: false,
+            prep: { lookup: 6200, audio: 2950, video: 1040, height: 480 } };
         d.send(net1);
         await sleep(100); said.length = 0; await shot('settings', () => d.send(net1));
         const sk = keys();
-        ['set:q:auto', 'set:q:720', 'set:q:480', 'set:q:360', 'set:speed', 'set:leave', 'set:fill', 'set:all'].forEach((k) => assert.ok(sk.indexOf(k) >= 0, k + ': ' + sk));
+        ['set:q:auto', 'set:q:720', 'set:q:480', 'set:q:360', 'set:speed', 'set:leave', 'set:fill', 'set:diag', 'set:all'].forEach((k) => assert.ok(sk.indexOf(k) >= 0, k + ': ' + sk));
         assert.ok(sk.indexOf('set:apply') < 0, 'auto is 480p now, as the video: nothing to apply');
         assert.ok(said.some((x) => /Videos come through the VPN/.test(x)), 'the way: ' + said.join('|'));
         assert.ok(said.some((x) => /2,5× faster than it plays \(3,2 Mbit\/s\)/.test(x)), 'the last video\'s rate: ' + said.join('|'));
+        assert.ok(said.indexOf('Last preparing: lookup 6,2 s · sound 3 s · video 1 s (480p)') >= 0, 'the last preparing\'s parts: ' + said.join('|'));
+        disp.pageTargets.find((t) => t.key === 'set:diag').run();
+        assert.strictEqual(hu.ctx.settings.get('diag'), true, 'Diagnostics switched on');
+        disp.pageTargets.find((t) => t.key === 'set:diag').run();
+        assert.strictEqual(hu.ctx.settings.get('diag'), false);
         const nQ2 = d.cmds('quality').length;
         disp.pageTargets.find((t) => t.key === 'set:q:720').run();
         await sleep(100); await hu.loopFn();
@@ -1034,13 +1044,13 @@ function serviceVersion() {
     assert.strictEqual(m.serviceOld(), null, 'not said yet: no warning');
     m.onMsg({ ev: 'state', state: 'idle' });
     assert.strictEqual(m.serviceOld(), 'old', 'a state event without a version: an older service');
-    [['0.3.12', '0.3.12'], ['0.3.14', '0.3.14'], ['0.3.15', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
+    [['0.3.12', '0.3.12'], ['0.3.15', '0.3.15'], ['0.3.16', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
         m.onMsg({ ev: 'state', state: 'idle', version: v });
         assert.strictEqual(m.serviceOld(), want, v);
     });
     m.setConnected(false);
     assert.strictEqual(m.serviceOld(), null, 'not connected: the other notice');
-    console.log('ok   the service version: older than 0.3.15 (or not said) is old');
+    console.log('ok   the service version: older than 0.3.16 (or not said) is old');
 }
 
 function channelSearch() {

@@ -83,7 +83,7 @@ class Ctl {
 
 const ACTIVE = ['preparing', 'playing', 'paused'];
 // the service this app needs (VPN build: the picture's wait past the video fetched, 0.3.12; its version said, 0.3.13)
-const SERVICE_NEED = '0.3.15';
+const SERVICE_NEED = '0.3.16';
 const older = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
 
 class Model {
@@ -115,6 +115,8 @@ class Model {
         this.chans = null;           // the subscribed channels: {items:[{id,title,handle}], loading, error, t}
         this.chan = null;            // the channel page shown: {id, title, items, shelves, loading, error, t}
         this.height = null;          // the playing video's height (service 0.3.15 on; null: not said)
+        this.stage = null;           // preparing: lookup | audio | video (service 0.3.16 on; null: not said)
+        this.prep = null;            // the last preparing's parts, ms: {lookup, audio, video, height}
         this.net = null;             // the Settings page: {via, iface, auto, video, speed, running} (netinfo, speedtest)
         this.rev = 0;                // bumped on every change the screens show
     }
@@ -153,6 +155,7 @@ class Model {
             this.buffering = m.buffering === true;
             this.service = typeof m.version === 'string' ? m.version : 'old';
             this.height = typeof m.height === 'number' ? m.height : null;
+            this.stage = typeof m.stage === 'string' ? m.stage : null;
             // another video than the one asked (the daemon's own, after an app restart): title and channel from a list;
             // either way the daemon's title wins unless it is only the id (said while preparing)
             if (m.id !== undefined && m.id !== this.id) { const r = this.item(m.id); this.id = m.id; this.title = r ? String(r.title || '') : ''; this.channel = r ? String(r.channel || '') : ''; }
@@ -163,7 +166,10 @@ class Model {
             if (this.state === 'idle' || (was !== 'preparing' && this.state === 'preparing')) { this.elapsed = 0; this.total = 0; this.fetched = null; }
             // a fresh ytdec starts with video on: tell it again where we are
             if (this.state === 'playing' && was !== 'playing' && was !== 'paused') { this.videoOn = null; this._video(); }
+        } else if (m.ev === 'prep') {
+            if (typeof m.lookup === 'number') this.prep = { lookup: m.lookup, audio: m.audio || 0, video: m.video || 0, height: m.height || null };
         } else if (m.ev === 'net') {
+            if (m.prep && typeof m.prep.lookup === 'number' && !this.prep) this.prep = m.prep;
             this.net = { via: m.via === 'vpn' ? 'vpn' : 'direct', iface: typeof m.iface === 'string' ? m.iface : null, auto: typeof m.auto === 'number' ? m.auto : null,
                 video: m.video && typeof m.video.mbps === 'number' ? m.video : null, speed: m.speed && typeof m.speed === 'object' ? m.speed : null, running: m.running === true };
         } else if (m.ev === 'auth') {

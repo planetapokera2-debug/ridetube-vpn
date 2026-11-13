@@ -87,6 +87,7 @@ mgu.run({
         const model = new Model((o) => ctl.send(o));
         let mode = 'home', browse = 'home', dirty = true;   // browse: the list the player goes back to
         const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); leftPlay(); };
+        if (settings.onChange) settings.onChange(() => { dirty = true; });     // (the settings sheet's, the Settings page's: drawn at once)
         const isFeed = (m) => FEEDS.indexOf(m) >= 0;
         // a feed tab: signed in, (re)load it; signed out, ask for a sign-in code (the daemon says the one shown again).
         // A new device flow starts only from here (show), the account button or the page's "tap" - never on its own
@@ -240,7 +241,10 @@ mgu.run({
         }
         const shownAt = () => Math.max(0, Math.min(model.total > 0 ? model.total : Infinity, model.elapsed + pend));
         // preparing: its percentage, or the network lost and the daemon trying again
-        const prepText = () => (model.retry ? tr('No connection - trying again (%s)...', model.retry) : tr('Preparing... %s %', Math.round(model.pct || 0)));
+        // what the preparing is at (service 0.3.16 on): the stream lookup, the sound, the first seconds of the video
+        const prepText = () => (model.retry ? tr('No connection - trying again (%s)...', model.retry)
+            : model.stage === 'lookup' ? tr('Looking the video up on YouTube...')
+                : tr(model.stage === 'audio' ? 'Loading the sound... %s %' : model.stage === 'video' ? 'Loading the video... %s %' : 'Preparing... %s %', Math.round(model.pct || 0)));
         // a failed play: Try again (the same video, the queue kept)
         const again = () => { if (model.id) play(model.id, model.item(model.id)); };
         /* ---------- SponsorBlock: per category Skip, a Skip button (ask) or Off (Settings) ---------- */
@@ -306,6 +310,7 @@ mgu.run({
         function note(s) { seen.push([Date.now(), s]); if (seen.length > 5) seen.shift(); dirty = true; }
         let prepFrom = 0;
         function diag() {
+            if (settings.get('diag') !== true) return [];
             const t = Date.now(), sp = parked.speed(), age = parked.age();
             let file = 'нет';
             try { file = fs.statSync(VPATH).isFile() ? 'есть' : 'нет'; } catch (e) { /* none */ }
@@ -821,9 +826,9 @@ mgu.run({
             // the quality: the next video's; the one playing again at it only when asked
             head(tr('Video quality'), TOP + 36);
             QUALITIES.forEach((v, i) => chip(cv, 'set:q:' + v, x + i * 196, TOP + 52, 180, tr(QLABEL[v]), q === v, () => { settings.set('quality', v); dirty = true; }));
-            let note = q === 'auto' && n && n.auto ? tr('Auto: %sp now (%s)', n.auto, n.auto === 720 ? tr('Wi-Fi') : tr('phone data')) + '. ' : '';
-            note += tr('The next video plays at it');
-            cv.text(fit(cv, note, 22, 1440 - 4 * 196, LIT), x + 4 * 196 + 10, TOP + 92, 22, C.dim, LIT);
+            const auto = q === 'auto' && n && n.auto ? tr('Auto: %sp now (%s)', n.auto, n.auto === 720 ? tr('Wi-Fi') : tr('phone data')) : null;
+            [auto, tr('The next video plays at it')].filter(Boolean).forEach((t, i, all) =>
+                cv.text(fit(cv, t, 22, W - x - 4 * 196 - 40, LIT), x + 4 * 196 + 10, TOP + (all.length > 1 ? 78 + i * 30 : 92), 22, C.dim, LIT));
             const want = heightOf(q);
             if (model.active() && model.height && want && want !== model.height) {
                 chip(cv, 'set:apply', x, TOP + 132, 640, tr('This video at %sp too (loads it again)', want), false, () => { model.quality(q); show('player'); });
@@ -849,13 +854,16 @@ mgu.run({
                 cv.text(fit(cv, tr('The last video%s came %s× faster than it plays (%s Mbit/s)', n.video.height ? ' (' + n.video.height + 'p)' : '', num(n.video.x), num(n.video.mbps)),
                     22, W - x - 30, LIT), x, y2 + 148, 22, n.video.x >= 1.5 ? C.dim : C.amber, LIT);
             }
+            const pr = model.prep, sec = (ms) => num(Math.round(ms / 100) / 10);
+            if (pr) cv.text(fit(cv, tr('Last preparing: lookup %s s · sound %s s · video %s s%s', sec(pr.lookup), sec(pr.audio), sec(pr.video), pr.height ? ' (' + pr.height + 'p)' : ''), 22, W - x - 30, LIT), x, y2 + 178, 22, C.dim, LIT);
             // the switches changed most, then the rest; the versions on the right of the heading
-            const y3 = TOP + 430, lv = settings.get('stop_on_leave') !== false, fl = settings.get('fill') !== false;
+            const y3 = TOP + 458, lv = settings.get('stop_on_leave') !== false, fl = settings.get('fill') !== false, dg = settings.get('diag') === true;
             head(tr('Other'), y3);
             cv.text(tr('App %s · service %s', ctx.spec && ctx.spec.version, model.service && model.service !== 'old' ? model.service : '?'), W - 30, y3, 20, '#717171', { literal: true, align: 'right' });
-            chip(cv, 'set:leave', x, y3 + 16, 430, tr('Pause on leaving: %s', tr(lv ? 'on' : 'off')), lv, () => { settings.set('stop_on_leave', !lv); dirty = true; });
-            chip(cv, 'set:fill', x + 450, y3 + 16, 430, tr('Fill the screen: %s', tr(fl ? 'on' : 'off')), fl, () => { settings.set('fill', !fl); model.fill(!fl); dirty = true; });
-            chip(cv, 'set:all', x + 900, y3 + 16, 330, tr('All settings'), false, () => allSettings());
+            chip(cv, 'set:leave', x, y3 + 16, 350, tr('Pause on leaving: %s', tr(lv ? 'on' : 'off')), lv, () => { settings.set('stop_on_leave', settings.get('stop_on_leave') === false); dirty = true; });
+            chip(cv, 'set:fill', x + 366, y3 + 16, 350, tr('Fill the screen: %s', tr(fl ? 'on' : 'off')), fl, () => { const on = settings.get('fill') === false; settings.set('fill', on); model.fill(on); dirty = true; });
+            chip(cv, 'set:diag', x + 732, y3 + 16, 310, tr('Diagnostics: %s', tr(dg ? 'on' : 'off')), dg, () => { settings.set('diag', settings.get('diag') !== true); dirty = true; });
+            chip(cv, 'set:all', x + 1058, y3 + 16, 300, tr('All settings'), false, () => allSettings());
         }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');

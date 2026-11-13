@@ -384,7 +384,14 @@ async function main() {
         ['audio.m4a', 'index.bin', 'video.h264.part'].forEach((f) => fs.writeFileSync(path.join(dir, f), 'old'));
         assert.strictEqual(isPlayable(dir), false);
         const pl = await fetchPlay(id);
-        assert.deepStrictEqual(c.evs.filter((x) => x.ev === 'state' && x.state === 'preparing').map((x) => x.pct), [0, 35, 70, 94, 99]);
+        assert.deepStrictEqual(c.evs.filter((x) => x.ev === 'state' && x.state === 'preparing').map((x) => [x.pct, x.stage]),
+            [[0, 'lookup'], [0, 'audio'], [35, 'audio'], [35, 'video'], [70, 'video'], [94, 'video'], [99, 'video']], 'the pct and what it is at');
+        // how long each part took: said once it plays (the app's Settings page), and in the log
+        const pr = c.evs.filter((x) => x.ev === 'prep');
+        assert.strictEqual(pr.length, 1);
+        assert.deepStrictEqual(Object.keys(pr[0]), ['ev', 'id', 'lookup', 'audio', 'video', 'height']);
+        assert.ok(pr[0].lookup >= 100 && pr[0].audio >= 0 && pr[0].video >= 0 && pr[0].height === 720, JSON.stringify(pr[0]));
+        assert.ok(c.evs.filter((x) => x.ev === 'state' && x.state === 'playing').every((x) => x.stage === null), 'playing: no stage');
         assert.strictEqual(pl.title, 'Fetched ' + id);
         assert.strictEqual(pl.buffering, false);
         const l = fetchLog();
@@ -676,7 +683,14 @@ async function main() {
     await t('preparing on the head: pct moves with the video lead', async () => {
         c.clear();
         await headPlay('FFFFFFFFFHA', 'head');
-        assert.deepStrictEqual(c.evs.filter((x) => x.ev === 'state' && x.state === 'preparing').map((x) => x.pct), [0, 35, 70, 94, 99]);
+        assert.deepStrictEqual(c.evs.filter((x) => x.ev === 'state' && x.state === 'preparing').map((x) => [x.pct, x.stage]),
+            [[0, 'lookup'], [0, 'audio'], [35, 'audio'], [35, 'video'], [70, 'video'], [94, 'video'], [99, 'video']], 'the pct and what it is at');
+        // how long each part took: said once it plays (the app's Settings page), and in the log
+        const pr = c.evs.filter((x) => x.ev === 'prep');
+        assert.strictEqual(pr.length, 1);
+        assert.deepStrictEqual(Object.keys(pr[0]), ['ev', 'id', 'lookup', 'audio', 'video', 'height']);
+        assert.ok(pr[0].lookup >= 100 && pr[0].audio >= 0 && pr[0].video >= 0 && pr[0].height === 720, JSON.stringify(pr[0]));
+        assert.ok(c.evs.filter((x) => x.ev === 'state' && x.state === 'playing').every((x) => x.stage === null), 'playing: no stage');
         await stopIdle();
     });
 
@@ -1412,6 +1426,8 @@ async function main() {
         c.clear();
         c.send({ cmd: 'netinfo' });
         const n = await c.waitFor((x) => x.ev === 'net');
+        assert.ok(n.prep && n.prep.height === 720 && n.prep.lookup >= 100, 'the last preparing\'s parts: ' + JSON.stringify(n.prep));
+        delete n.prep;
         assert.deepStrictEqual(n, { ev: 'net', via: 'vpn', iface: 'wwan0', auto: 480, video: { mbps: 4, x: 4, height: 720 }, speed: null, running: false });
         const asked = [];
         let pings = [180, 120, 150];
