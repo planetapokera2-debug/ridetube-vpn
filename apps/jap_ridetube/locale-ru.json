@@ -111,5 +111,7 @@
  "Your Home, Subscriptions and Watch later, on the car": "Ваши Главная, Подписки и «Смотреть позже» - в машине",
  "Loading the video up to here: %s of %s": "Загружаю видео до этого места: %s из %s",
  "Update the RideTube service in the MGU Store: %s on the car, this app needs %s": "Обнови «RideTube service» в MGU Store: в машине %s, нужна %s",
- "an older one": "старая"
+ "an older one": "старая",
+ "Exit": "Выйти",
+ "Exit RideTube (stops the video)": "Выйти из RideTube (видео остановится)"
 }

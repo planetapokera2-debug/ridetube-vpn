@@ -72,6 +72,29 @@ def main():
         xml = xml[:block.end()] + block.group(0).replace('id="%s"' % after, 'id="%s"' % cid, 1) + xml[block.end():]
         texts[sid] = st['label']
         names[n] = (cid, cont)
+    # the menu's buttons the published HMI description lacks (Exit): a button each, after the one before it in app.json
+    for scr in app['screens']:
+        prev = None
+        for it in scr.get('items', []):
+            if it[0] == 'button' and it[1] not in names:
+                after, cont = names[prev]
+                cid = str(max(used) + 1)
+                used.append(int(cid))
+                sid = 'SID_JAP_RIDETUBE_' + it[1]
+                comps = ui['containers'][cont]['components']
+                new = {}
+                for k, c in comps.items():
+                    new[k] = c
+                    if k == after:
+                        new[cid] = {'type': 'button', 'name': it[1], 'properties': {'Visible': {'value': 1, 'type': 'UInt'}, 'Focusable': {'value': 2, 'type': 'UInt'}},
+                                    'rows': [{'Text': {'value': sid, 'type': 'StringId'}}]}
+                ui['containers'][cont]['components'] = new
+                block = re.search(r'( *)<component id="%s" type="button"[^>]*>.*?</component>\n' % after, xml, re.S)
+                xml = xml[:block.end()] + block.group(0).replace('id="%s"' % after, 'id="%s"' % cid, 1) + xml[block.end():]
+                texts[sid] = it[2]
+                names[it[1]] = (cid, cont)
+            if len(it) > 1:
+                prev = it[1]
     put(ui_n, json.dumps(ui, ensure_ascii=False).encode('utf-8'))
     put(xml_n, xml.encode('utf-8'))
     both = dict(words, **kit)

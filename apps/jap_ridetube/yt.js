@@ -83,7 +83,7 @@ class Ctl {
 
 const ACTIVE = ['preparing', 'playing', 'paused'];
 // the service this app needs (VPN build: the picture's wait past the video fetched, 0.3.12; its version said, 0.3.13)
-const SERVICE_NEED = '0.3.13';
+const SERVICE_NEED = '0.3.14';
 const older = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
 
 class Model {

@@ -19,7 +19,7 @@ const readline = require('readline');
 const socksLib = require('./socks');
 
 // said in every state event: the app tells the owner when the service is older than it needs (component.json's; a test checks)
-const VERSION = '0.3.13';
+const VERSION = '0.3.14';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
 const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
@@ -1579,6 +1579,10 @@ Daemon.prototype.onTime = function (v) {
     if (!(v.total > 1)) return; // {elapsed:0,total:1} right after playFile
     if (this.tickWaiter) { this.tickWaiter(); return; } // resume(): the restarted file plays, its setTime can follow
     if (this.switching || this.headWait || this.videoWait) return; // the restart's times, or a paused player
+    if (this.paused) { // ours stopped there: a time moving away from it is the player playing on its own
+        if (this.stoppedAt !== null && this.stoppedAt !== undefined && Math.abs(v.elapsed - this.stoppedAt) > 1500) this.keepPaused('time ' + v.elapsed);
+        return;
+    }
     if (this.settle && Date.now() < this.settle.until && v.elapsed < this.settle.ms - 2000) return; // before our setTime landed
     this.elapsed = v.elapsed;
     this.lastTickAt = Date.now();
@@ -1604,6 +1608,7 @@ Daemon.prototype.onPlayerState = function (v) {
     if (!this.ticking) return;
     if (v === 'PLAYER_STATE_PLAY') this.sawPlay = true; // also mid-switch: the full file's own PLAY arms its end
     if (this.switching) return;
+    if (v === 'PLAYER_STATE_PLAY' && this.paused && !this.headWait) return this.keepPaused('PLAY');
     // the head file ran out (before onTime saw its end): wait for audio.m4a, never `ended`
     if (v === 'PLAYER_STATE_STOP' && this.head && this.sawPlay) {
         this.sawPlay = false;
@@ -1625,6 +1630,15 @@ Daemon.prototype.onPlayerState = function (v) {
         this.toYtdec('pause');
         this.setState('paused');
     }
+};
+// paused, the player plays again on its own: the car gives the sound back to the last source after a voice
+// input, a call or a navigation prompt (car, 2026-11-13: sound without the picture, the app away). Stopped again
+Daemon.prototype.keepPaused = function (why) {
+    const now = Date.now();
+    if (now - (this.keptAt || 0) < 1500) return undefined; // our STOP's own events
+    this.keptAt = now;
+    this.log('paused, the player played (' + why + '): stopped again at ' + (this.stoppedAt === null || this.stoppedAt === undefined ? this.elapsed : this.stoppedAt));
+    return this.hold(this.stoppedAt === null || this.stoppedAt === undefined ? this.elapsed : this.stoppedAt).catch((e) => this.log(e));
 };
 Daemon.prototype.onPlaybackError = function (v) {
     if (!this.ticking) return;

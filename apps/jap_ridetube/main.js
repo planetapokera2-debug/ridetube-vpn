@@ -280,6 +280,16 @@ mgu.run({
             awayPrep = false;
             if (model.state === 'playing' && !oursShown() && leaveOn()) { log.info('left the app while preparing: paused'); model.toggle(); }
         }
+        // Exit (the rail, the HMI menu): the video stops (the sound and the car's audio source released, nothing
+        // plays on hidden) and the app's screens close. The process stays, as MainApp wants: opened again, the list
+        function exit() {
+            log.info('exit: stopped, screens closed');
+            queue = []; nextAt = 0; awayPrep = false;
+            model.stop();
+            show(browse);
+            ['MAIN', 'VIEW'].forEach((n) => Promise.resolve(ui.close(n)).catch((e) => log.warn('exit: close ' + n + ': ' + e)));
+        }
+        ui.onClick('BTN_EXIT', () => exit());
         ui.onVisible((name, v) => { note(name + (v ? '+' : '-')); if (v) appHidden = false; leftCheck(); });
         if (ctx.app && ctx.app.on) ctx.app.on('changeVisibility', (d) => {
             const v = !(d && d.visible === false);
@@ -455,16 +465,18 @@ mgu.run({
         ];
         // while something plays: back to the player (the bar's Now playing, where the kit runs the screen)
         const PLAYING = ['player', 'Playing', (cv, x, y, c) => { [10, 20, 14].forEach((h, k) => cv.roundRect(x - 15 + k * 11, y + 8 - h, 8, h + 8, 2, c)); }];
+        // last: Exit (a power mark), where the kit runs the screen (else the HMI menu's Exit)
+        const EXIT = ['exit', 'Exit', (cv, x, y, c) => { cv.arc(x, y + 2, 13, 16.5, 35, 325, c); cv.line(x, y - 17, x, y - 1, 3.5, c); }];
         function drawRail(cv) {
             const sel = mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode, bottom = H + (cv.own ? cv.extra : 0);
-            const items = cv.own && model.active() ? RAIL.concat([PLAYING]) : RAIL;
+            const items = cv.own ? RAIL.concat(model.active() ? [PLAYING] : [], [EXIT]) : RAIL;
             const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
             items.forEach(([m, name, glyph], i) => {
                 const cx = 62, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
                 if (on) { cv.roundRect(18, cy - 38, 90, 84, 16, bg); cv.roundRect(18, cy - 14, 5, 28, 2.5, C.red); }
                 glyph(cv, cx, cy - 8, c, bg);
                 cv.text(short(name === 'Subscriptions' ? 'Subs' : name), cx, cy + 34, 18, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
-                if (cv.own) cv.target(16, cy - 38, 92, 84, () => (m === 'search' ? ui.open('MAIN') : show(m)), 'rail:' + m, 16);
+                if (cv.own) cv.target(16, cy - 38, 92, 84, () => (m === 'search' ? ui.open('MAIN') : m === 'exit' ? exit() : show(m)), 'rail:' + m, 16);
             });
         }
 

@@ -328,6 +328,39 @@ async function main() {
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
     });
 
+    await t('paused, the car plays the source again (after a voice input): STOP again, still paused, no time moves', async () => {
+        await playing();
+        tick(20000);
+        c.send({ cmd: 'pause' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'paused');
+        await sleep(1600);     // past our own STOP's events
+        calls.length = 0; c.clear();
+        subs.playerState('PLAYER_STATE_PLAY');   // the car gives the sound back to the last source
+        await waitUntil(() => called('sendButtonEvent').length === 1);
+        assert.deepStrictEqual(called('sendButtonEvent').map((x) => x.a.button), ['STOP']);
+        subs.playerState('PLAYER_STATE_STOP');   // that STOP's own: not `ended`, not a second hold
+        tick(21000);                             // a tick on the way: ignored, the clock stays
+        await sleep(200);
+        assert.strictEqual(d.state, 'paused');
+        assert.strictEqual(d.elapsed, 20000);
+        assert.ok(!c.evs.some((x) => x.ev === 'time' || (x.ev === 'state' && x.state !== 'paused')), JSON.stringify(c.evs));
+        assert.strictEqual(called('sendButtonEvent').length, 1);
+        await sleep(1600);
+        tick(25000);                             // no PLAY event, but the time runs: stopped again
+        await waitUntil(() => called('sendButtonEvent').length === 2);
+        assert.strictEqual(d.stoppedAt, 20000);
+        assert.ok(logs.some((l) => /the player played \(time 25000\): stopped again at 20000/.test(l)));
+        // resume: from where it was paused
+        c.send({ cmd: 'resume' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing');
+        await waitUntil(() => called('playFile').length > 0);
+        tick(0);
+        await waitUntil(() => called('setTime').length > 0);
+        assert.deepStrictEqual(called('setTime')[0].a, { newTimeElapsed: 20000 });
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+    });
+
     await t('end of file (STOP after PLAY, near the end) -> ended, audio released', async () => {
         await playing();
         tick(58000);

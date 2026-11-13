@@ -1,5 +1,15 @@
 # Changelog
 
+## App 0.3.15, service 0.3.14 (VPN build, modified version)
+
+- Paused, the sound came back on its own about a minute later, the app away (car, 2026-11-13): after a voice input
+  (or a call, a navigation prompt) the car gives the sound back to the last source and plays the car's player
+  again. The service now stops the player again whenever it plays (or its time moves) while paused; Play in the app
+  plays on from where it was paused.
+- Exit: the last entry of the left rail and a button in the HMI menu («Выйти из RideTube (видео остановится)»).
+  The video stops (the sound and the car's audio source are released) and the app's screens close.
+- The app needs service 0.3.14 (the warning line says so for an older one).
+
 ## App 0.3.14, service 0.3.13 (VPN build, modified version)
 
 - The settings survive a Store update: the Store installs an update afresh (an empty data/), so every update lost

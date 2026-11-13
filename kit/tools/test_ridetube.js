@@ -336,14 +336,14 @@ async function appFrames() {
     assert.strictEqual(d.cmds('thumb').length, 0, 'no tiles, no thumbs');
     assert.strictEqual(d.cmds('library').length, 0, 'no library asked');
     // an app updated without its service: a line on the page says which one to update (state events say the version, 0.3.13 on)
-    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.13';
+    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.14';
     d.send({ ev: 'state', state: 'idle' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(said.indexOf(OLDS) >= 0, 'an older service: ' + said.join('|'));
-    d.send({ ev: 'state', state: 'idle', version: '0.3.12' });
-    await sleep(100); said.length = 0; await hu.loopFn();
-    assert.ok(said.some((x) => /: 0\.3\.12 on the car, this app needs 0\.3\.13$/.test(x)), '0.3.12: ' + said.join('|'));
     d.send({ ev: 'state', state: 'idle', version: '0.3.13' });
+    await sleep(100); said.length = 0; await hu.loopFn();
+    assert.ok(said.some((x) => /: 0\.3\.13 on the car, this app needs 0\.3\.14$/.test(x)), '0.3.13: ' + said.join('|'));
+    d.send({ ev: 'state', state: 'idle', version: '0.3.14' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(!said.some((x) => /Update the RideTube service/.test(x)), 'the one it needs: no line');
     console.log('ok   an older service (or one that does not say its version): the page says to update it');
@@ -843,6 +843,27 @@ async function appFrames() {
         for (let k = 0; k < 40 && !d.cmds('play').some((x) => x.id === 'ZYXWVUTSRQP'); k++) { await sleep(200); await hu.loopFn(); }
         assert.ok(d.cmds('play').some((x) => x.id === 'ZYXWVUTSRQP'), 'the next one in the row plays');
         console.log('ok   autoplay: the next video in the row, 5 s after the end');
+        // Exit: the last on the rail and in the HMI menu; the video stops (the daemon releases the sound), the screens close
+        d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP' });
+        hu.handlers.BTN_RESULTS();
+        await sleep(100); await hu.loopFn();
+        const rk = keys().filter((k) => /^rail:/.test(k));
+        assert.strictEqual(rk[rk.length - 1], 'rail:exit', 'Exit last on the rail: ' + rk);
+        const nStop = d.cmds('stop').length, closed = [], oc = hu.ui.close;
+        hu.ui.close = async (n) => { closed.push(n); return oc(n); };
+        disp.pageTargets.find((t) => t.key === 'rail:exit').run();
+        await until(() => d.cmds('stop').length > nStop, 2000, 'Exit stops the video');
+        await sleep(50);
+        assert.deepStrictEqual(closed, ['MAIN', 'VIEW'], 'and closes the app\'s screens');
+        d.send({ ev: 'state', state: 'idle' });
+        await sleep(100);
+        assert.ok(hu.handlers.BTN_EXIT, 'Exit in the HMI menu too');
+        closed.length = 0;
+        hu.handlers.BTN_EXIT();
+        await sleep(50);
+        assert.deepStrictEqual(closed, ['MAIN', 'VIEW'], 'the menu\'s Exit closes them as well');
+        hu.ui.close = oc;
+        console.log('ok   Exit (rail, HMI menu): stops the video, closes the screens');
     }
     Recorder.prototype.text = ot; Recorder.prototype.fillRect = of;
     d.server.close();
@@ -916,13 +937,13 @@ function serviceVersion() {
     assert.strictEqual(m.serviceOld(), null, 'not said yet: no warning');
     m.onMsg({ ev: 'state', state: 'idle' });
     assert.strictEqual(m.serviceOld(), 'old', 'a state event without a version: an older service');
-    [['0.3.12', '0.3.12'], ['0.3.13', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
+    [['0.3.12', '0.3.12'], ['0.3.13', '0.3.13'], ['0.3.14', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
         m.onMsg({ ev: 'state', state: 'idle', version: v });
         assert.strictEqual(m.serviceOld(), want, v);
     });
     m.setConnected(false);
     assert.strictEqual(m.serviceOld(), null, 'not connected: the other notice');
-    console.log('ok   the service version: older than 0.3.13 (or not said) is old');
+    console.log('ok   the service version: older than 0.3.14 (or not said) is old');
 }
 
 function channelSearch() {
