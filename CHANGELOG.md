@@ -1,5 +1,18 @@
 # Changelog
 
+## Service 0.3.18 (VPN build, modified version; the app stays 0.3.18)
+
+- «Загрузить видео» (the picture of a video started while driving) no longer downloads its sound again: the whole
+  audio.m4a stays and only the video is fetched (about a megabyte a minute of the video less). The same for a quality
+  change while playing and for a fetch that broke after the sound was in.
+- The traffic counter takes the sound as it downloads: a video stopped before its sound was whole now counts what it
+  fetched (before, nothing).
+- ytfetch.py: `fetch --keep-audio`; `audio` events carry `bytes` (downloaded so far), `audio_ready` carries `dl`
+  (downloaded for it) or `kept: true`.
+- Tests: the daemon (fake fetcher: the kept sound on fullvideo and on a quality change, not counted again; a fetch
+  stopped mid-sound counted), the fetcher against YouTube (--audio-only, then --keep-audio: the same audio.m4a, only
+  the video comes).
+
 ## App 0.3.18, service 0.3.17 (VPN build, modified version)
 
 - Sound only while driving (a setting, on by default): a video started while the car moves (the picture is not shown

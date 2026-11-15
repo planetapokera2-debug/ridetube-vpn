@@ -380,8 +380,8 @@ async function main() {
     await t('play uncached: the fetcher (env {}, cwd /) into a fresh dir; preparing pct; playing after audio_ready + 10 s of video', async () => {
         fs.writeFileSync(ctl, ''); fs.writeFileSync(ytlog, ''); setMode('ok');
         const id = 'FFFFFFFFFF1', dir = path.join(cache, id);
-        fs.mkdirSync(dir); // a killed fetch's leftover: fetched again
-        ['audio.m4a', 'index.bin', 'video.h264.part'].forEach((f) => fs.writeFileSync(path.join(dir, f), 'old'));
+        fs.mkdirSync(dir); // a killed fetch's leftover (the sound unfinished too): fetched again
+        ['audio.m4a.part', 'index.bin', 'video.h264.part'].forEach((f) => fs.writeFileSync(path.join(dir, f), 'old'));
         assert.strictEqual(isPlayable(dir), false);
         const pl = await fetchPlay(id);
         assert.deepStrictEqual(c.evs.filter((x) => x.ev === 'state' && x.state === 'preparing').map((x) => [x.pct, x.stage]),
@@ -898,7 +898,7 @@ async function main() {
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
     });
 
-    await t('quality while playing: fetched again at that height; same height: nothing', async () => {
+    await t('quality while playing: fetched again at that height, the whole sound kept (--keep-audio); same height: nothing', async () => {
         fs.writeFileSync(ctl, ''); setMode('ok');
         const id = 'FFFFFFFFFF7';
         await fetchPlay(id);
@@ -910,6 +910,8 @@ async function main() {
         await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
         assert.deepStrictEqual(fetchLog().argv.slice(1, 5), ['fetch', '--cache-dir', path.join(cache, 'ytdlp'), '--height'].slice(0, 4));
         assert.strictEqual(fetchLog().argv[fetchLog().argv.indexOf('--height') + 1], '480');
+        assert.ok(fetchLog().argv.indexOf('--keep-audio') >= 0, 'the sound was whole: ' + fetchLog().argv.join(' '));
+        assert.ok(!c.evs.some((x) => x.ev === 'state' && x.state === 'preparing' && x.stage === 'audio' && x.pct > 0), 'no sound download');
         c.send({ cmd: 'stop' });
         await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
     });
@@ -947,7 +949,9 @@ async function main() {
         c.send({ cmd: 'quality', quality: '480' });
         await sleep(300);
         assert.ok(!c.evs.some((x) => x.ev === 'state' && x.state === 'preparing'));
-        // the driver asks for the picture (parked): the video is fetched now, at the quality asked
+        // the driver asks for the picture (parked): the video is fetched now, at the quality asked; the sound stays
+        // (--keep-audio: not downloaded nor counted again)
+        const ino = fs.statSync(path.join(dir, 'audio.m4a')).ino, used = d.trafficInfo().today;
         c.clear();
         c.send({ cmd: 'fullvideo', quality: '480' });
         const pl2 = await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
@@ -955,6 +959,11 @@ async function main() {
         const l2 = fetchLog();
         assert.ok(l2.argv.indexOf('--audio-only') < 0, 'the full fetch: ' + l2.argv.join(' '));
         assert.strictEqual(l2.argv[l2.argv.indexOf('--height') + 1], '480');
+        assert.ok(l2.argv.indexOf('--keep-audio') >= 0, 'the sound kept: ' + l2.argv.join(' '));
+        assert.strictEqual(fs.statSync(path.join(dir, 'audio.m4a')).ino, ino, 'the same audio.m4a');
+        assert.strictEqual(called('playFile').slice(-1)[0].a.path, path.join(dir, 'audio.m4a'));
+        await waitUntil(() => d.fetchedMs === 12000);
+        assert.strictEqual(d.trafficInfo().today - used, 2500, 'only the video counted');
         await waitUntil(() => ytdecLines().some((x) => / argv --dir /.test(x)));
         c.clear();
         c.send({ cmd: 'fullvideo', quality: '480' });            // not sound-only any more: nothing
@@ -1013,6 +1022,14 @@ async function main() {
         // a daemon started again reads it
         d.traffic = null;
         assert.strictEqual(d.trafficInfo().today, after.today);
+        // a fetch stopped before the sound was whole: what it downloaded is counted (the fake: 350 of the sound)
+        fs.writeFileSync(ctl, 'hold');
+        await fetchPlay('TRAFFICTR02');
+        await waitUntil(() => d.fetchedMs === 12000);
+        c.send({ cmd: 'stop' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'idle');
+        assert.strictEqual(d.trafficInfo().today - after.today, 350 + 2500);
+        fs.writeFileSync(ctl, '');
     });
 
     await t('auth_status with no account: signed out', async () => {

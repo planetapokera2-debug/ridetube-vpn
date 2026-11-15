@@ -9,6 +9,10 @@
 fetch writes <dir>/meta.json, audio.m4a, video.h264 (+ .part while running) and index.bin, and prints
 one JSON event per line on stdout: meta, audio, audio_head, audio_ready, video, done | error (then exit 1).
 audio_head {ms, bytes}: <dir>/audio.head.m4a is a complete MP4 of the audio's first ms, before audio.m4a.
+audio {pct, bytes}: bytes downloaded so far; audio_ready {bytes, dl}: audio.m4a's size and the bytes downloaded for it
+(the daemon's traffic counter: an aborted fetch's sound is counted too).
+fetch --keep-audio: <dir>/audio.m4a is already whole (a sound-only play, now with its picture): only the video is
+fetched; audio_ready {bytes, kept: true} at once.
 fetch --info <f>: the extraction extract wrote there (if fresh), not a new one: ~2.5 s less on the car.
 serve: loads yt-dlp (~1.2 s on the car), prints {"ev":"warm"}, then runs the one argv list read from stdin.
 check is the owner's self-test, run as root over ssh (it drops to the fetch uid itself).
@@ -801,7 +805,7 @@ def audio_ranged(a, ya, info, meta):
         if prefix >= total:
             gate.set()
         if tick():
-            emit(ev='audio', pct=min(100, round(done * 100 / total)))
+            emit(ev='audio', pct=min(100, round(done * 100 / total)), bytes=done)
         if st['head'] is not None or not prefix or prefix >= total:
             return
         rate = done / max(time.monotonic() - t0, 0.1)
@@ -850,7 +854,8 @@ def fetch(a):
         if st.get('status') == 'downloading' and tick_a():
             total = st.get('total_bytes') or st.get('total_bytes_estimate')
             if total:
-                emit(ev='audio', pct=min(100, round(st.get('downloaded_bytes', 0) * 100 / total)))
+                emit(ev='audio', pct=min(100, round(st.get('downloaded_bytes', 0) * 100 / total)),
+                     bytes=st.get('downloaded_bytes', 0))
 
     ya = yt_dlp.YoutubeDL(dict(ydl_params(a, AUDIO_FMT, audio_hook),
                                outtmpl={'default': os.path.join(a.dir, 'audio.src.%(ext)s')}))
@@ -872,6 +877,11 @@ def fetch(a):
         fail('no avc1 video')
 
     def audio():
+        kept = os.path.join(a.dir, 'audio.m4a')
+        if a.keep_audio and os.path.isfile(kept):   # the sound is here already: not downloaded again
+            done_a['ok'] = True
+            emit(ev='audio_ready', bytes=os.path.getsize(kept), kept=True)
+            return
         try:
             src = None
             try:
@@ -884,9 +894,10 @@ def fetch(a):
             part = os.path.join(a.dir, 'audio.m4a.part')
             n, _ = flatten_m4a(src, part)
             os.replace(part, os.path.join(a.dir, 'audio.m4a'))
+            dl = os.path.getsize(src)
             os.remove(src)
             done_a['ok'] = True
-            emit(ev='audio_ready', bytes=n)
+            emit(ev='audio_ready', bytes=n, dl=dl)
         except BaseException as e:  # noqa: BLE001
             fail(f'audio: {ya.params["logger"].last or e}')
 
@@ -1062,6 +1073,7 @@ def main(argv=None):
     ap.add_argument('--cache-dir', required=True)
     ap.add_argument('--height', type=int, default=720)
     ap.add_argument('--audio-only', action='store_true')   # fetch: the sound alone (a play started while driving)
+    ap.add_argument('--keep-audio', action='store_true')   # fetch: the whole audio.m4a in <dir> is kept, only the video comes
     ap.add_argument('--node', default=NODE)
     ap.add_argument('--lease', default=LEASE)
     ap.add_argument('--pyz')

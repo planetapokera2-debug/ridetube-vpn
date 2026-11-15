@@ -4,7 +4,8 @@
 // cwd, uid to <ctl>.log, writes the files as ytfetch.py does, then waits for <ctl> to say done or error.
 // <ctl> at start: "fail" = an error before audio is ready ("gone": a refused video); "head" = audio_head (60 s) before the video, audio_ready
 // after it; "hold" = audio_head, audio_ready only once <ctl> says "full" or "done"; else audio_ready, no head. Later "more": all
-// the video at once (600 s), the fetch still open.
+// the video at once (600 s), the fetch still open. --keep-audio with a whole audio.m4a: audio_ready {kept} at once, no audio events.
+// The sound: 350 bytes downloaded at 50 %, 700 in all (audio_ready dl; audio.m4a 690).
 // serve: says warm, then runs the argv list read from stdin (logged with served: true). extract: writes <dir> = info.json.
 const fs = require('fs');
 const path = require('path');
@@ -25,13 +26,19 @@ if (args[0] === 'extract') {
     return;
 }
 const mode = () => { try { return fs.readFileSync(ctl, 'utf8').trim(); } catch (e) { return ''; } };
-const start = mode(), withHead = start === 'head' || start === 'hold', audioOnly = args.indexOf('--audio-only') >= 0;   // sound only: no video files, done once the sound is
+const start = mode(), withHead = start === 'head' || start === 'hold', audioOnly = args.indexOf('--audio-only') >= 0;
+const kept = args.indexOf('--keep-audio') >= 0 && fs.existsSync(path.join(dir, 'audio.m4a'));   // sound only: no video files, done once the sound is
 fs.writeFileSync(ctl + '.log', JSON.stringify({ argv: [ctl].concat(args), served: served, env: Object.keys(process.env), cwd: process.cwd(), uid: process.getuid(), pid: process.pid }));
 let full = false, more = false;
-const audioReady = () => { full = true; fs.renameSync(path.join(dir, 'audio.m4a.part'), path.join(dir, 'audio.m4a')); say({ ev: 'audio_ready', bytes: 700 }); };
+const audioReady = () => {
+    full = true;
+    if (kept) return say({ ev: 'audio_ready', bytes: 690, kept: true });
+    fs.renameSync(path.join(dir, 'audio.m4a.part'), path.join(dir, 'audio.m4a'));
+    return say({ ev: 'audio_ready', bytes: 690, dl: 700 });
+};
 const steps = [
     () => { fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ id: id, title: 'Fetched ' + id, channel: 'C', duration_s: 600 })); say({ ev: 'meta', title: 'Fetched ' + id, duration_s: 600 }); },
-    () => { if (start === 'fail') { say({ ev: 'error', msg: 'boom' }); process.exit(1); } if (start === 'gone') { say({ ev: 'error', msg: 'Video unavailable' }); process.exit(1); } fs.writeFileSync(path.join(dir, 'audio.m4a.part'), 'a'); say({ ev: 'audio', pct: 50 }); },
+    () => { if (start === 'fail') { say({ ev: 'error', msg: 'boom' }); process.exit(1); } if (start === 'gone') { say({ ev: 'error', msg: 'Video unavailable' }); process.exit(1); } if (!kept) { fs.writeFileSync(path.join(dir, 'audio.m4a.part'), 'a'); say({ ev: 'audio', pct: 50, bytes: 350 }); } },
     () => { if (withHead) { fs.writeFileSync(path.join(dir, 'audio.head.m4a'), 'h'); say({ ev: 'audio_head', ms: 60000, bytes: 1 }); } else audioReady(); },
     () => { if (audioOnly) return; fs.writeFileSync(path.join(dir, 'index.bin'), 'i'); fs.writeFileSync(path.join(dir, 'video.h264.part'), 'v'); say({ ev: 'video', ms: 5000, frames: 150, bytes: 1000, pct: 8 }); },
     () => { if (!audioOnly) say({ ev: 'video', ms: 12000, frames: 360, bytes: 2500, pct: 20 }); }

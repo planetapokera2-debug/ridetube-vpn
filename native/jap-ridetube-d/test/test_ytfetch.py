@@ -284,6 +284,8 @@ class Ranged(unittest.TestCase, Pipeline):
         finally:
             ytfetch._out, ytfetch.HEAD_MIN_MS, ytfetch.AUDIO_FIRST, ytfetch.AUDIO_CHUNK = old
         evs = [json.loads(x) for x in buf.getvalue().splitlines()]
+        prog = [e for e in evs if e['ev'] == 'audio']
+        self.assertTrue(prog and all(0 < e['bytes'] <= len(self.srv.data) for e in prog), prog)  # the traffic counter's
         heads = [e for e in evs if e['ev'] == 'audio_head']
         self.assertEqual(len(heads), 1, evs)
         self.assertGreaterEqual(heads[0]['ms'], 10000)
@@ -525,7 +527,8 @@ class Online(unittest.TestCase, Pipeline):
             shutil.rmtree(tmp)
 
     def test_fetch_audio_only(self):
-        """--audio-only (a play started while driving, 0.3.17): the sound alone, no video event or file, then done"""
+        """--audio-only (a play started while driving, 0.3.17): the sound alone, no video event or file, then done;
+        then --keep-audio (its picture, asked parked, 0.3.18): only the video comes, the same audio.m4a stays"""
         tmp = tempfile.mkdtemp(dir=TMP)
         try:
             out, cache = os.path.join(tmp, 'out'), os.path.join(tmp, 'cache')
@@ -546,13 +549,32 @@ class Online(unittest.TestCase, Pipeline):
             hd = next((e for e in evs if e['ev'] == 'audio_head'), None)
             self.assertEqual(sorted(os.listdir(out)), (['audio.head.m4a'] if hd else []) + ['audio.m4a', 'meta.json'])
             ready = next(e for e in evs if e['ev'] == 'audio_ready')
-            self.assertEqual(ready['bytes'], os.path.getsize(os.path.join(out, 'audio.m4a')), 'the bytes the traffic counter takes')
+            self.assertEqual(ready['bytes'], os.path.getsize(os.path.join(out, 'audio.m4a')))
+            self.assertGreater(ready['dl'], 0, 'the bytes downloaded: what the traffic counter takes')
             with open(os.path.join(out, 'meta.json')) as f:
                 dur = json.load(f)['duration_s']
             got = float(subprocess.run([FFPROBE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0',
                                         os.path.join(out, 'audio.m4a')], capture_output=True, text=True, check=True).stdout)
             self.assertLess(abs(got - dur), 2.0, 'the whole sound is there')
-            print(f"\n  online, sound only: {ready['bytes']} bytes for {dur} s", file=sys.stderr)
+            print(f"\n  online, sound only: {ready['bytes']} bytes ({ready['dl']} downloaded) for {dur} s", file=sys.stderr)
+            # the picture now: the daemon leaves audio.m4a alone and passes --keep-audio (the smallest video: 360p)
+            for n in os.listdir(out):
+                if n != 'audio.m4a':
+                    os.remove(os.path.join(out, n))
+            ino = os.stat(os.path.join(out, 'audio.m4a')).st_ino
+            p = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'ytfetch.py'), 'fetch', vid, out, '--keep-audio',
+                                '--height', '360', '--cache-dir', cache, '--pyz', PYZ, '--node', NODE, '--lease', lease],
+                               capture_output=True, text=True, env={}, cwd='/', timeout=600)
+            evs = [json.loads(x) for x in p.stdout.splitlines()]
+            self.assertEqual((p.returncode, evs[-1]), (0, {'ev': 'done'}), p.stdout[-2000:] + p.stderr[-2000:])
+            kinds = [e['ev'] for e in evs]
+            self.assertEqual([k for k in kinds if k.startswith('audio')], ['audio_ready'], 'no sound downloaded')
+            self.assertEqual(next(e for e in evs if e['ev'] == 'audio_ready'), {'ev': 'audio_ready', 'bytes': ready['bytes'], 'kept': True})
+            self.assertEqual(os.stat(os.path.join(out, 'audio.m4a')).st_ino, ino)
+            self.assertEqual(sorted(os.listdir(out)), ['audio.m4a', 'index.bin', 'meta.json', 'video.h264'])
+            ytfetch.validate(os.path.join(out, 'index.bin'), os.path.join(out, 'video.h264'))
+            print(f"  online, its picture: {os.path.getsize(os.path.join(out, 'video.h264'))} bytes of video, the sound kept",
+                  file=sys.stderr)
         finally:
             shutil.rmtree(tmp)
 

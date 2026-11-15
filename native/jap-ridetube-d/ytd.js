@@ -19,7 +19,7 @@ const readline = require('readline');
 const socksLib = require('./socks');
 
 // said in every state event: the app tells the owner when the service is older than it needs (component.json's; a test checks)
-const VERSION = '0.3.17';
+const VERSION = '0.3.18';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
 const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
@@ -1427,18 +1427,25 @@ Daemon.prototype.waitFull = function (ms) {
 // ytfetch.py into a fresh dir; resolves once playable (audio complete or its head, and startVideoMs of video,
 // or all of it), rejects if it ends before. Resolves with the head's ms when it starts on the head only, else null.
 // It keeps writing the video (and the rest of the audio) after that, while we play.
+// A whole audio.m4a already here (a sound-only play, now with its picture; a quality change; a fetch that broke after
+// the sound) is kept: only the video is fetched (--keep-audio, 0.3.18; it was downloaded again, ~1 MB a minute).
 Daemon.prototype.fetchVideo = function (id, dir, audioOnly) {
     return new Promise((resolve, reject) => {
-        rmrf(dir); // a killed fetch's leftovers
+        const keepAudio = !audioOnly && isAudioReady(dir);
+        if (keepAudio) fs.readdirSync(dir).forEach((n) => { if (n !== 'audio.m4a') rmrf(path.join(dir, n)); });
+        else rmrf(dir); // a killed fetch's leftovers
         mkdirp(dir);
         fs.chmodSync(dir, VIDEO_DIR_MODE);
         this.chownFetch(dir);
         const info = this.freshInfo(id) ? ['--info', this.infoFile(id)] : [];
-        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(audioOnly ? ['--audio-only'] : [], info, ['--', id, dir]));
+        const child = this.spawnJob(['fetch', '--cache-dir', this.ytc(), '--height', String(this.cur.height || 720)].concat(audioOnly ? ['--audio-only'] : [], keepAudio ? ['--keep-audio'] : [], info, ['--', id, dir]));
         this.fetcher = child;
         this.preparing = id;
         this.fetchedMs = audioOnly ? Infinity : 0;   // sound only: no video to wait for
-        let counted = 0;                             // the video's bytes already in the traffic counter
+        let counted = 0, countedA = 0;               // the video's and the sound's bytes already in the traffic counter
+        // the sound by what is downloaded so far (audio events), the rest at audio_ready: a fetch stopped before
+        // the sound was whole counts what it took (0.3.18); a kept sound (--keep-audio) is not counted again
+        const countAudio = (n) => { n = Number(n) || 0; if (n > countedA) { this.count('audio', n - countedA); countedA = n; } };
         let audio = false, head = null, done = false, started = false, err = null;
         // what the preparing is at (the app says it under the ring) and how long each part took (the log, the app's
         // Settings page): lookup (yt-dlp: the streams), audio (to the first playable sound), video (to startVideoMs)
@@ -1491,11 +1498,11 @@ Daemon.prototype.fetchVideo = function (id, dir, audioOnly) {
                 if (m.title) this.cur.title = String(m.title);
                 if (m.duration_s > 0) this.cur.durationMs = m.duration_s * 1000;
                 if (Array.isArray(m.chapters)) this.cur.chapters = m.chapters;
-            } else if (m.ev === 'audio') pct((audioOnly ? 0.99 : 0.7) * (Number(m.pct) || 0));
+            } else if (m.ev === 'audio') { pct((audioOnly ? 0.99 : 0.7) * (Number(m.pct) || 0)); countAudio(m.bytes); }
             else if (m.ev === 'audio_head' && Number(m.ms) > 0) { if (head === null) { head = Number(m.ms); if (!audioOnly) { stage('video'); pct(70); } } }
             else if (m.ev === 'audio_ready') {
                 audio = true;
-                this.count('audio', Number(m.bytes) || 0);
+                if (!m.kept) countAudio(m.dl || m.bytes);
                 if (!started && !audioOnly) stage('video');
                 if (!audioOnly) pct(70);
                 if (started) this.onFullAudio();
@@ -1657,7 +1664,7 @@ Daemon.prototype.requality = async function (quality) {
     const c = this.cur;
     if (!c || c.audioOnly || qualityHeight(quality, readJson(this.opts.leaseFile)) === c.height) return undefined;
     await this.stop(null);
-    rmrf(c.dir);
+    try { fs.unlinkSync(path.join(c.dir, 'video.h264')); } catch (e) { /* still fetching (.part) */ }   // the sound stays: fetchVideo keeps it
     return this.play(c.id, c.rect, c.fill, null, quality, c.skip);
 };
 
