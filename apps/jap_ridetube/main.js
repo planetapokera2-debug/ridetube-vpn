@@ -247,7 +247,7 @@ mgu.run({
         // what the preparing is at (service 0.3.16 on): the stream lookup, the sound, the first seconds of the video
         const prepText = () => (model.retry ? tr('No connection - trying again (%s)...', model.retry)
             : model.stage === 'lookup' ? tr('Looking the video up on YouTube...')
-                : tr(model.stage === 'audio' ? 'Loading the sound... %s %' : model.stage === 'video' ? 'Loading the video... %s %' : 'Preparing... %s %', Math.round(model.pct || 0)));
+                : tr({ audio: 'Loading the sound... %s %', video: 'Loading the video... %s %' }[model.stage] || 'Preparing... %s %', Math.round(model.pct || 0)));
         // a failed play: Try again (the same video, the queue kept)
         const again = () => { if (model.id) play(model.id, model.item(model.id)); };
         /* ---------- SponsorBlock: per category Skip, a Skip button (ask) or Off (Settings) ---------- */
@@ -736,6 +736,21 @@ mgu.run({
             cv.roundRect(x, H - 72, w2, 52, 26, '#4a3a10');
             cv.text(fit(cv, t, 24, w2 - 48, LIT), x + 24, H - 38, 24, '#ffd27a', LIT);
         }
+        // after a Store update (owner, 18.11.2026): say for 2 minutes from the first frame that the settings came back
+        // from the bmw-vpn copy (green), or that there was none and they are the defaults (yellow, the service is there)
+        let keepFrom = 0;
+        function keepNote() {
+            if (!keepFrom) keepFrom = Date.now();
+            if (Date.now() - keepFrom > 120000) return null;
+            if (settings.restored) return { text: settings.restoredN ? tr('Settings restored after the update: %s changed', settings.restoredN) : tr('Settings restored after the update'), ok: true };
+            if (settings.fresh && settings.keep && fs.existsSync(settings.keep.pub)) return { text: tr('Default settings: no saved copy was found'), ok: false };
+            return null;
+        }
+        function keepBanner(cv, n) {
+            const w2 = Math.min(cv.textWidth(n.text, 24, LIT) + 48, W - X0 - 24), x = browsing() ? (RAIL_W + W - w2) / 2 : (W - w2) / 2;
+            cv.roundRect(x, H - 72, w2, 52, 26, n.ok ? '#1f3d1f' : '#4a3a10');
+            cv.text(fit(cv, n.text, 24, w2 - 48, LIT), x + 24, H - 38, 24, n.ok ? '#7ee07e' : '#ffd27a', LIT);
+        }
         const OFF2 = tr('Install the RideTube service (jap-ridetube-d) from the MGU Store');
         function drawResults(cv) {
             if (!model.connected) return say(cv, OFF, OFF2);
@@ -1167,7 +1182,8 @@ mgu.run({
                 else {
                     if (browsing()) drawRail(cv);
                     if (mode === 'player') drawPlayer(cv); else if (mode === 'settings') drawSettings(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
-                    if (model.serviceOld() && mode !== 'player') oldService(cv);
+                    const kn = mode !== 'player' && keepNote();
+                    if (model.serviceOld() && mode !== 'player') oldService(cv); else if (kn) keepBanner(cv, kn);
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }

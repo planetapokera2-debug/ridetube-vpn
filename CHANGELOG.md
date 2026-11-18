@@ -1,5 +1,13 @@
 # Changelog
 
+## App 0.3.19 (VPN build, modified version; the service stays 0.3.18)
+
+- After a Store update the pages say for two minutes (from the first look at the screen) that the settings came back
+  from the bmw-vpn copy - «Настройки восстановлены после обновления: изменённых N» (green) - or, the service there but
+  no copy, «Настройки по умолчанию: сохранённой копии не нашлось» (yellow).
+- Tests: the line on the page (restored, the defaults, no service: nothing); how many settings came back; the Russian
+  check no longer takes the stage name of «Загрузка видео…» for a text.
+
 ## Service 0.3.18 (VPN build, modified version; the app stays 0.3.18)
 
 - «Загрузить видео» (the picture of a video started while driving) no longer downloads its sound again: the whole

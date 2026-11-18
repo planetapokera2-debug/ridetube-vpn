@@ -347,6 +347,19 @@ async function appFrames() {
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(!said.some((x) => /Update the RideTube service/.test(x)), 'the one it needs: no line');
     console.log('ok   an older service (or one that does not say its version): the page says to update it');
+    // after a Store update: the settings came back from the bmw-vpn copy - a green line says so (2 min from the first frame)
+    const st = hu.ctx.settings;
+    st.restored = true; st.restoredN = 3;
+    await sleep(300); said.length = 0; await hu.loopFn();   // (an unchanged screen is redrawn 4 times a second)
+    assert.ok(said.indexOf('Settings restored after the update: 3 changed') >= 0, 'restored: ' + said.join('|'));
+    st.restored = false; st.fresh = true; st.keep = { pub: dir };
+    await sleep(300); said.length = 0; await hu.loopFn();   // (an unchanged screen is redrawn 4 times a second)
+    assert.ok(said.indexOf('Default settings: no saved copy was found') >= 0, 'no copy: ' + said.join('|'));
+    st.keep = { pub: path.join(dir, 'none') };
+    await sleep(300); said.length = 0; await hu.loopFn();   // (an unchanged screen is redrawn 4 times a second)
+    assert.ok(!said.some((x) => /^Default settings/.test(x)), 'no bmw-vpn service: nothing to say');
+    st.fresh = false;
+    console.log('ok   after a Store update: the page says the settings were restored (or are the defaults)');
     // recent search -> results with a 320x180 thumb
     hu.handlers.BTN_S1();
     await until(() => d.cmds('search').length, 2000, 'search');
@@ -1067,10 +1080,11 @@ function settingsKeep() {
     const d2 = path.join(t, 'oap_2'); fs.mkdirSync(d2);
     const b = new (mk(d2))(schema, keep);
     assert.ok(b.restored && b.get('quality') === other, 'an update (data/ empty): taken back');
+    assert.ok(b.fresh && b.restoredN === 1, 'one setting of the owner\'s own came back: ' + b.restoredN);
     schema.filter((x) => x.reset).forEach((x) => assert.strictEqual(b.get(x.key), x.default, x.key + ': its reset mark kept, so not reset again'));
     fs.writeFileSync(path.join(pub, 'jap_ridetube.json'), JSON.stringify({ quality: q.default }));
     const c = new (mk(d2))(schema, keep);
-    assert.ok(!c.restored && c.get('quality') === other, 'its own settings win over the copy');
+    assert.ok(!c.restored && !c.fresh && c.get('quality') === other, 'its own settings win over the copy');
     const d3 = path.join(t, 'oap_3'); fs.mkdirSync(d3);
     const e = new (mk(d3))(schema, { id: 'jap_ridetube', ctl: path.join(t, 'none'), pub: path.join(t, 'none') });
     e.set('quality', other);

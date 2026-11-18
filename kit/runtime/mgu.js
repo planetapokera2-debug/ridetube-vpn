@@ -98,11 +98,14 @@ class Settings {
         for (const s of this.schema) this.values[s.key] = s.default;
         let mine = null;
         try { mine = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch (e) {}
+        this.fresh = !mine;                     // no settings of its own: a first install, or a Store update
         if (!mine && this.keep) {
             try {
                 const k = JSON.parse(fs.readFileSync(path.join(this.keep.pub, this.keep.id + '.json'), 'utf8'));
                 if (k && typeof k === 'object' && !Array.isArray(k)) {
                     mine = k; this.restored = true;
+                    // how many are the owner's own, not the defaults (the copy holds every value)
+                    this.restoredN = this.schema.filter((it) => Object.prototype.hasOwnProperty.call(k, it.key) && JSON.stringify(k[it.key]) !== JSON.stringify(it.default)).length;
                     try { fs.writeFileSync(this.file, JSON.stringify(k, null, 1)); } catch (e) { /* read-only */ }
                     log.info('settings: taken back from the copy kept by bmw-vpn (an update installed the app afresh)');
                 }
