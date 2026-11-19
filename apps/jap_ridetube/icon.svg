@@ -1,53 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- RideTube: a night road running to the horizon under a glowing screen with a rounded play mark. -->
+  <!-- ТвойТюб (0.3.22): a big «Т» - its bar a glowing screen with the play mark, its stem the road running down to you. -->
   <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0a0f26"/>
-      <stop offset="0.62" stop-color="#1b1747"/>
-      <stop offset="0.64" stop-color="#05070c"/>
-      <stop offset="1" stop-color="#05070c"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d1247"/>
+      <stop offset="1" stop-color="#070a18"/>
     </linearGradient>
-    <radialGradient id="haze" cx="0.5" cy="0.6" r="0.55">
-      <stop offset="0" stop-color="#ff3fa4" stop-opacity="0.5"/>
-      <stop offset="0.55" stop-color="#7a3cff" stop-opacity="0.16"/>
-      <stop offset="1" stop-color="#7a3cff" stop-opacity="0"/>
+    <radialGradient id="glow" cx="0.5" cy="0.34" r="0.6">
+      <stop offset="0" stop-color="#ff3f8e" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#ff3f8e" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="play" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffd36b"/>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffc35a"/>
       <stop offset="1" stop-color="#ff3f8e"/>
     </linearGradient>
     <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1a1d2c"/>
-      <stop offset="1" stop-color="#0d0f18"/>
-    </linearGradient>
-    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#9cf0ff" stop-opacity="0.45"/>
-      <stop offset="1" stop-color="#3ad6ff"/>
+      <stop offset="0" stop-color="#3ad6ff"/>
+      <stop offset="1" stop-color="#b8f4ff"/>
     </linearGradient>
     <clipPath id="tile"><rect x="8" y="8" width="240" height="240" rx="54"/></clipPath>
   </defs>
-  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#sky)"/>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"/>
   <g clip-path="url(#tile)">
-    <rect x="0" y="30" width="256" height="210" fill="url(#haze)"/>
-    <g fill="#cfe2ff">
-      <circle cx="48" cy="46" r="1.6" opacity="0.8"/>
-      <circle cx="210" cy="40" r="1.2" opacity="0.6"/>
-      <circle cx="30" cy="120" r="1.0" opacity="0.5"/>
-      <circle cx="228" cy="128" r="1.2" opacity="0.6"/>
+    <rect x="0" y="0" width="256" height="256" fill="url(#glow)"/>
+    <!-- the stem: the road, wider near you, cut by the tile's edge -->
+    <path d="M108 112 L148 112 L190 256 L66 256 Z" fill="url(#road)"/>
+    <g fill="#0b1030">
+      <rect x="124.5" y="140" width="7" height="20" rx="3.5"/>
+      <rect x="123.5" y="176" width="9" height="26" rx="4.5"/>
+      <rect x="122.5" y="218" width="11" height="34" rx="5.5"/>
     </g>
-    <!-- the road to the horizon (y 160) -->
-    <path d="M118 160 L138 160 L214 256 L42 256 Z" fill="url(#road)"/>
-    <path d="M118 160 L42 256" stroke="url(#edge)" stroke-width="3"/>
-    <path d="M138 160 L214 256" stroke="url(#edge)" stroke-width="3"/>
-    <g fill="#ffd36b" opacity="0.85">
-      <rect x="126.5" y="172" width="3" height="10" rx="1.5"/>
-      <rect x="126" y="196" width="4" height="15" rx="2"/>
-      <rect x="125.5" y="226" width="5" height="22" rx="2.5"/>
-    </g>
-    <rect x="0" y="159" width="256" height="2" fill="#3ad6ff" opacity="0.55"/>
   </g>
-  <!-- the screen: a cyan outline, open dark glass, the rounded play mark glowing inside -->
-  <rect x="58" y="58" width="140" height="92" rx="20" fill="#0a0f26" fill-opacity="0.72" stroke="#3ad6ff" stroke-width="6"/>
-  <rect x="58" y="58" width="140" height="92" rx="20" fill="none" stroke="#9cf0ff" stroke-opacity="0.35" stroke-width="14"/>
-  <path d="M112 84 Q112 73 122 78.5 L152 96 Q160 104 152 112 L122 129.5 Q112 135 112 124 Z" fill="url(#play)"/>
+  <!-- the bar: the screen -->
+  <rect x="34" y="40" width="188" height="84" rx="24" fill="url(#screen)"/>
+  <path d="M114 63 Q114 56 120.5 59.6 L148 75.5 Q154 82 148 88.5 L120.5 104.4 Q114 108 114 101 Z" fill="#0b1030"/>
 </svg>

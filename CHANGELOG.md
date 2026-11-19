@@ -1,5 +1,11 @@
 # Changelog
 
+## App 0.3.22 (VPN build, modified version)
+
+- Its own icon (owner, 19.11.2026): a big «Т», its bar a screen with the play mark, its stem the road
+  (apps/jap_ridetube/icon.svg; icon.png 140 px rendered from it). tools/patch_app.py now puts it into the package
+  (rhmiData/.../jap_ridetube_icon.png, the car's app list); the Store's icon is the same file.
+
 ## App 0.3.21 (VPN build, modified version)
 
 - A name of its own (owner, 19.11.2026): «ТвойТюб» in the MGU Store, the app list, the screens' titles and the Russian
