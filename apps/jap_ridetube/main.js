@@ -1022,7 +1022,7 @@ mgu.run({
         function drawPodcast(cv, SW, SH, LX, tg, run, live) {
             cv.fillRect(0, 0, SW, SH, C.bg);
             const x0 = LX + 46, top = 40, ch = model.channel || (model.item(model.id) || {}).channel;
-            cv.text('RideTube', x0, top + 30, 34, '#ffffff', LITB);
+            cv.text('ТвойТюб', x0, top + 30, 34, '#ffffff', LITB);
             // sound only (0.3.17): this play was started while driving, its video was not fetched - parked, a button loads it
             const snd = model.audioOnly, moving = noVideo();
             const chip = tr(snd ? 'Sound only' : 'Podcast mode · driving'), cw = cv.textWidth(chip, 22, LIT) + 40;

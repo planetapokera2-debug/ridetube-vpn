@@ -1,5 +1,12 @@
 # Changelog
 
+## App 0.3.21 (VPN build, modified version)
+
+- A name of its own (owner, 19.11.2026): «ТвойТюб» in the MGU Store, the app list, the screens' titles and the Russian
+  texts; the service is «ТвойТюб: служба» in the Store (its catalog title only, the package stays 0.3.19). The ids
+  (jap_ridetube, jap-ridetube-d) stay, so the update goes in place and the sign-in and the settings stay.
+- kit/tools/test_runtime.js runs to the end on Node 8 (no fs.rmSync there).
+
 ## App 0.3.20, service 0.3.19 (VPN build, modified version)
 
 - Faster start (owner, 19.11.2026: a long video sat on «Загрузка звука…» for a long time). The service started only
