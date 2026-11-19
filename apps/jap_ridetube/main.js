@@ -63,7 +63,7 @@ const SEARCH_MS = 8000;                                  // a search with no ans
 const SUGGEST = ['Music', 'News', 'Cars', 'Podcasts', 'Comedy', 'Trailers'].map((x) => tr(x));
 const SLOTS = ['BTN_S1', 'BTN_S2', 'BTN_S3', 'BTN_S4', 'BTN_S5', 'BTN_S6'];
 const TABS = ['home', 'subs', 'wl'];
-const NAMES = { home: tr('Home'), subs: tr('Subscriptions'), wl: tr('Watch later'), results: tr('Results'), settings: tr('Settings') };
+const NAMES = { home: tr('Home'), subs: tr('Subscriptions'), wl: tr('Watch later'), results: tr('Results'), settings: tr('Settings'), queue: tr('Queue') };
 const FEED_MS = 15000;                                   // a feed with no answer by then is an error on screen
 const SIGNIN_URL = 'https://www.google.com/device';
 
@@ -177,7 +177,7 @@ mgu.run({
             ui.text('MAIN_INFO', s);
         }
         info();
-        setInterval(() => { try { model.checkSearch(Date.now(), SEARCH_MS); model.checkFeeds(Date.now(), FEED_MS); if (ui.isVisible('MAIN')) info(); } catch (e) { log.error('info', e); } }, 1000);
+        setInterval(() => { try { sleepTick(); model.checkSearch(Date.now(), SEARCH_MS); model.checkFeeds(Date.now(), FEED_MS); if (ui.isVisible('MAIN')) info(); } catch (e) { log.error('info', e); } }, 1000);
 
         /* ---------- playing ---------- */
         // the decoder's picture size. Full-screen layout: the whole screen, for the full view (ytdec fits, or
@@ -194,9 +194,29 @@ mgu.run({
         // list: the row it was picked from; the videos after it play next when one ends (autoplay)
         const QUALITIES = ['auto', '720', '480', '360'];   // app.json's Video quality values, in the button's order
         let queue = [], nextAt = 0;
-        function play(id, it, list) {
+        // VPN build 0.3.20 - my queue (owner, 19.11.2026: pick the videos parked, then drive). The rail's Queue page: Pick videos
+        // (then a tap on any tile adds it, again removes it), Play the queue, Clear; kept in data/queue.json. A video of it
+        // that plays leaves it; played from it, the next of it follows (qMode), as the row's do otherwise.
+        const QFILE = path.join(ctx.dataDir || '/tmp', 'queue.json'), Q_MAX = 50;
+        let myQ = [], collect = false, clearArmed = 0, qMode = false;
+        try { myQ = JSON.parse(fs.readFileSync(QFILE, 'utf8')).filter((r) => r && /^[\w-]{11}$/.test(r.id)).slice(0, Q_MAX); } catch (e) { /* none yet */ }
+        const saveQ = () => { try { fs.writeFileSync(QFILE, JSON.stringify(myQ)); } catch (e) { log.warn('queue: ' + e); } };
+        const inQ = (id) => myQ.findIndex((r) => r.id === id);
+        function toggleQ(r) {
+            const i = inQ(r.id);
+            if (i >= 0) myQ.splice(i, 1);
+            else if (myQ.length < Q_MAX) myQ.push({ id: r.id, title: r.title, channel: r.channel, duration_s: r.duration_s, meta: r.meta });
+            saveQ(); dirty = true;
+        }
+        const nextUp = () => (qMode ? myQ[0] : queue[0]);
+        const takeNext = () => (qMode ? myQ[0] : queue.shift());
+        function play(id, it, list, fromQ) {
             show('player');
+            qMode = !!fromQ;
+            sleepHeld = false;
+            if (inQ(id) >= 0) { myQ.splice(inQ(id), 1); saveQ(); }
             if (list) { const i = list.findIndex((r) => r.id === id); queue = list.slice(i + 1).filter((r) => r && !r.act && /^[\w-]{11}$/.test(r.id)); }
+            else if (fromQ) queue = [];
             nextAt = 0;
             if (model.id === id && model.active()) return;
             // driving (the picture is not shown): only the sound is fetched - a megabyte a minute instead of five to eight, no wait for the video
@@ -206,13 +226,34 @@ mgu.run({
         const loadVideo = () => model.fullVideo(String(settings.get('quality') || 'auto'));
         // from render: ended with a next one -> 5 s to see what comes, then it plays (back to the list cancels)
         function autoNext() {
-            if (model.state !== 'ended' || !queue.length || mode !== 'player') { nextAt = 0; return null; }
+            if (model.state !== 'ended' || !nextUp() || mode !== 'player' || sleepEnd() || sleepHeld) { nextAt = 0; return null; }
             if (!nextAt) { nextAt = Date.now() + 5000; wake(); }
-            if (Date.now() < nextAt) return queue[0];
-            const r = queue.shift();
-            play(r.id, r);
+            if (Date.now() < nextAt) return nextUp();
+            const r = takeNext();
+            play(r.id, r, null, qMode);
             return null;
         }
+        // VPN build 0.3.20 - the sleep timer (Settings): 15 / 30 / 60 min, or to the video's end; then a pause (no next video)
+        const SLEEP = [0, 15, 30, 60, 'end'];
+        let sleep = { v: 0, at: 0 }, sleepHeld = false;   // held: the timer stopped at a video's end - nothing follows it
+        function nextSleep() {
+            const v = SLEEP[(SLEEP.indexOf(sleep.v) + 1) % SLEEP.length];
+            sleep = { v: v, at: typeof v === 'number' && v ? Date.now() + v * 60000 : 0 };
+            dirty = true;
+        }
+        const sleepEnd = () => {   // to the video's end: it ended - the timer is done, nothing follows
+            if (sleep.v !== 'end' || model.state !== 'ended') return false;
+            sleep = { v: 0, at: 0 }; sleepHeld = true; model.toast = { text: tr('Sleep timer: stopped'), until: Date.now() + 8000 };
+            return true;
+        };
+        function sleepTick() {
+            if (!sleep.at || Date.now() < sleep.at) return;
+            sleep = { v: 0, at: 0 };
+            if (model.state === 'playing') model.toggle();
+            model.toast = { text: tr('Sleep timer: paused'), until: Date.now() + 15000 };
+            dirty = true;
+        }
+        const sleepLabel = () => (!sleep.v ? tr('off') : sleep.v === 'end' ? tr('to the video\'s end') : tr('%s min', Math.max(1, Math.ceil((sleep.at - Date.now()) / 60000))));
         let lastPlay = null, lastList = null, lastAcct = null;
         function labels() {
             const p = tr(model.state === 'playing' ? 'Pause' : 'Play');
@@ -479,17 +520,23 @@ mgu.run({
             for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; cv.line(x + Math.cos(a) * 10, y + Math.sin(a) * 10, x + Math.cos(a) * 19, y + Math.sin(a) * 19, 7, c); }
             cv.circle(x, y, 14, c); cv.circle(x, y, 6, bg);
         }];
+        const QUEUE = ['queue', 'Queue', (cv, x, y, c) => {
+            [-12, -2, 8].forEach((dy, k) => cv.roundRect(x - 18, y + dy, k === 2 ? 18 : 26, 4, 2, c));
+            cv.roundRect(x + 4, y + 9, 16, 4, 2, c); cv.roundRect(x + 10, y + 3, 4, 16, 2, c);
+        }];
         const EXIT = ['exit', 'Exit', (cv, x, y, c) => { cv.arc(x, y + 2, 13, 16.5, 35, 325, c); cv.line(x, y - 17, x, y - 1, 3.5, c); }];
         function drawRail(cv) {
             const sel = mode === 'results' ? 'search' : mode === 'channel' ? 'subs' : mode, bottom = H + (cv.own ? cv.extra : 0);
-            const items = cv.own ? RAIL.concat(model.active() ? [PLAYING] : [], [GEAR, EXIT]) : RAIL;
+            const items = cv.own ? RAIL.concat([QUEUE], model.active() ? [PLAYING] : [], [GEAR, EXIT]) : RAIL;
             const pitch = Math.min(100, (bottom - 156) / (items.length - 1));   // (the page down to the screen's bottom where it reaches)
             // seven entries (Playing, Settings, Exit) on 600 px: closer, the lit one's card and the names smaller
-            const bh = Math.min(84, Math.floor(pitch) - 2), fs = pitch < 84 ? 16 : 18, ty = pitch < 84 ? 28 : 34;
+            // eight (the Queue, 0.3.20) on 569 px: ~59 apart - the glyph higher, the name just above the next one's card
+            const tight = pitch < 70;
+            const bh = Math.min(84, Math.floor(pitch) - 2), fs = tight ? 15 : pitch < 84 ? 16 : 18, ty = tight ? Math.floor(pitch) - 42 : pitch < 84 ? 28 : 34;
             items.forEach(([m, name, glyph], i) => {
                 const cx = 62, cy = 96 + Math.round(i * pitch), on = m === sel, bg = on ? '#2c2c2c' : C.bg, c = on ? '#ffffff' : C.dim;
                 if (on) { cv.roundRect(18, cy - 38, 90, bh, 16, bg); cv.roundRect(18, cy - 14, 5, 28, 2.5, C.red); }
-                glyph(cv, cx, cy - 8, c, bg);
+                glyph(cv, cx, cy - (tight ? 14 : 8), c, bg);
                 cv.text(short(name === 'Subscriptions' ? 'Subs' : name), cx, cy + ty, fs, c, { literal: true, align: 'center', font: on ? 'bold' : 'label' });
                 if (cv.own) cv.target(16, cy - 38, 92, bh, () => (m === 'search' ? ui.open('MAIN') : m === 'exit' ? exit() : m === 'settings' ? openSettings() : show(m)), 'rail:' + m, 16);
             });
@@ -515,6 +562,11 @@ mgu.run({
                 const d = clock(r.duration_s * 1000), dw = cv.textWidth(d, 20, LITB) + 16;
                 cv.roundRect(x + TW - 8 - dw, y + TH - 36, dw, 28, 6, '#000000cc');
                 cv.text(d, x + TW - 16, y + TH - 15, 20, '#ffffff', { literal: true, font: 'bold', align: 'right' });
+            }
+            const qi = inQ(r.id);   // in my queue: its place, top left
+            if (qi >= 0) {
+                cv.circle(x + 26, y + 26, 20, C.red);
+                cv.text(String(qi + 1), x + 26, y + 34, 22, '#ffffff', { literal: true, font: 'bold', align: 'center' });
             }
             if (cur) {
                 cv.strokeRoundRect(x - 2, y - 2, TW + 4, TH + 4, 14, 3, C.red);
@@ -651,7 +703,8 @@ mgu.run({
                 for (let i = Math.max(0, off - 1); i <= Math.min(n - 1, off + PER_ROW); i++) {
                     const r = row.items[i], x = X0 + (i - off) * PITCH, key = letter + ':' + ri + ':' + r.id;
                     if (shown && x + TW > RAIL_W && x < W) (row.chan || r.act ? drawChan : drawTile)(cv, r, x, ty, key);
-                    const run = r.act ? () => r.act() : row.chan ? () => openChannel(r) : () => play(r.id, r, row.items);
+                    const run = r.act ? () => r.act() : row.chan ? () => openChannel(r) : mode === 'queue' ? () => play(r.id, r, null, true)
+                        : collect ? () => toggleQ(r) : () => play(r.id, r, row.items);
                     if (cv.own) { cv.target(x - 10, ty - 10, TW + 20, TILE_H + 16, run, key, 18); where[key] = { ri, i }; }
                 }
             });
@@ -750,6 +803,25 @@ mgu.run({
             const w2 = Math.min(cv.textWidth(n.text, 24, LIT) + 48, W - X0 - 24), x = browsing() ? (RAIL_W + W - w2) / 2 : (W - w2) / 2;
             cv.roundRect(x, H - 72, w2, 52, 26, n.ok ? '#1f3d1f' : '#4a3a10');
             cv.text(fit(cv, n.text, 24, w2 - 48, LIT), x + 24, H - 38, 24, n.ok ? '#7ee07e' : '#ffd27a', LIT);
+        }
+        const PLUS = (cv, cx, cy, c) => { cv.roundRect(cx - 30, cy - 4, 60, 8, 4, c); cv.roundRect(cx - 4, cy - 30, 8, 60, 4, c); };
+        const PLAYG = (cv, cx, cy, c) => tri(cv, cx + 6, cy, 40, c);
+        const CLEAR = (cv, cx, cy, c) => { cv.line(cx - 24, cy - 24, cx + 24, cy + 24, 7, c); cv.line(cx - 24, cy + 24, cx + 24, cy - 24, 7, c); };
+        function drawQueue(cv) {
+            const now = Date.now(), acts = [{ id: '::pick', title: tr(collect ? 'Picking: on' : 'Pick videos'), sub: tr(collect ? 'Tap here when done' : 'Then tap videos on any page'),
+                act: () => { collect = !collect; dirty = true; }, glyph: collect ? SHOW : PLUS }];
+            if (myQ.length) {
+                acts.push({ id: '::play', title: tr('Play the queue'), sub: tr('%s videos', myQ.length), act: () => { collect = false; play(myQ[0].id, myQ[0], null, true); }, glyph: PLAYG });
+                acts.push({ id: '::clear', title: tr(clearArmed > now ? 'Press again to clear' : 'Clear the queue'), sub: '',
+                    act: () => { if (clearArmed > Date.now()) { myQ = []; saveQ(); clearArmed = 0; } else { clearArmed = Date.now() + 4000; setTimeout(() => { dirty = true; }, 4100); } dirty = true; }, glyph: CLEAR });
+            }
+            const secs = [{ title: tr('My queue'), sub: myQ.length ? tr('%s videos', myQ.length) : tr('Pick videos parked, then drive: they play one after another'), items: acts }];
+            if (myQ.length) secs.push({ title: tr('In the queue'), items: myQ, grid: true });
+            drawPage(cv, secs);
+        }
+        function collectBanner(cv) {
+            const t = tr('Picking for the queue: tap videos to add them · in the queue %s · done: Queue', myQ.length);
+            keepBanner(cv, { text: t, ok: true });
         }
         const OFF2 = tr('Install the RideTube service (jap-ridetube-d) from the MGU Store');
         function drawResults(cv) {
@@ -890,6 +962,7 @@ mgu.run({
             chip(cv, 'set:audio', x + 732, y3 + 14, 450, tr('Sound only while driving: %s', tr(ad ? 'on' : 'off')), ad, () => { settings.set('audio_drive', settings.get('audio_drive') === false); dirty = true; });
             chip(cv, 'set:diag', x, y3 + 88, 350, tr('Diagnostics: %s', tr(dg ? 'on' : 'off')), dg, () => { settings.set('diag', settings.get('diag') !== true); dirty = true; });
             chip(cv, 'set:all', x + 366, y3 + 88, 350, tr('All settings'), false, () => allSettings());
+            chip(cv, 'set:sleep', x + 732, y3 + 88, 450, tr('Sleep timer: %s', sleepLabel()), !!sleep.v, () => nextSleep());
         }
         function drawPlayer(cv) {
             cv.fillRect(0, TOP, W, H - TOP, '#000000');
@@ -1009,12 +1082,12 @@ mgu.run({
                 big('ov:ff', mid + 100, 58, false, () => model.skip(10000), num('+10', mid + 100));
             }
             else if (model.state === 'error' && model.id) big('ov:play', mid - 100, 72, true, again, (c) => retryGlyph(cv, mid - 100, cy, 30, c));
-            if (queue.length) {
+            if (nextUp()) {
                 const nx = mid + 300;
-                big('ov:next', nx, 58, false, () => { const r = queue.shift(); play(r.id, r); }, (c) => {
+                big('ov:next', nx, 58, false, () => { const r = takeNext(); play(r.id, r, null, qMode); }, (c) => {
                     cv.quad([[nx - 22, cy - 26], [nx - 22, cy + 26], [nx + 12, cy], [nx - 22, cy - 26]], c); cv.fillRect(nx + 14, cy - 26, 9, 52, c);
                 });
-                const up = tr('Up next  ·  %s', String(queue[0].title || queue[0].id)), uw = Math.min(700, cv.textWidth(up, 26, LIT) + 50);
+                const up = tr(qMode ? 'Next in the queue  ·  %s' : 'Up next  ·  %s', String(nextUp().title || nextUp().id)), uw = Math.min(700, cv.textWidth(up, 26, LIT) + 50);
                 cv.roundRect(SW - 60 - uw, SH - 96, uw, 64, 16, '#1c1c1c');
                 cv.text(fit(cv, up, 26, uw - 50, LIT), SW - 60 - uw + 25, SH - 54, 26, '#dddddd', LIT);
             }
@@ -1181,9 +1254,9 @@ mgu.run({
                 if (mode === 'player' && cv.own && cv.place && cv.place.full) drawFull(cv);
                 else {
                     if (browsing()) drawRail(cv);
-                    if (mode === 'player') drawPlayer(cv); else if (mode === 'settings') drawSettings(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
+                    if (mode === 'player') drawPlayer(cv); else if (mode === 'settings') drawSettings(cv); else if (mode === 'channel') drawChannel(cv); else if (mode === 'results') drawResults(cv); else if (mode === 'queue') drawQueue(cv); else drawFeed(cv, isFeed(mode) ? mode : 'home');
                     const kn = mode !== 'player' && keepNote();
-                    if (model.serviceOld() && mode !== 'player') oldService(cv); else if (kn) keepBanner(cv, kn);
+                    if (model.serviceOld() && mode !== 'player') oldService(cv); else if (collect && mode !== 'player' && mode !== 'queue') collectBanner(cv); else if (kn) keepBanner(cv, kn);
                     // where the kit runs the screen the rail has the pages: the header shows just the name
                     if (cv.own) G.frame(cv, ctx.theme(), [], -1); else G.frame(cv, ctx.theme(), TABS.map((m) => NAMES[m]), TABS.indexOf(mode));
                 }

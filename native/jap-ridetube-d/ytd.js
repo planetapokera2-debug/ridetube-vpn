@@ -19,7 +19,7 @@ const readline = require('readline');
 const socksLib = require('./socks');
 
 // said in every state event: the app tells the owner when the service is older than it needs (component.json's; a test checks)
-const VERSION = '0.3.18';
+const VERSION = '0.3.19';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
 const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
@@ -833,7 +833,7 @@ function Daemon(o) {
     this.fetcher = null;   // ytfetch.py, as the fetch uid
     this.fetchedMs = Infinity; // video fetched up to there (pts ms)
     this.buffering = false;
-    this.head = null;      // {ms}: playing audio.head.m4a (the first ms of the audio) until audio.m4a is ready
+    this.head = null;      // {ms, file}: playing a head (audio.head[.<n>].m4a, the first ms of the audio) until audio.m4a is ready
     this.fullReady = false; // audio.m4a complete
     this.headWait = false; // past the head, waiting for audio.m4a: the player is paused, the state buffering
     this.videoWait = false; // past the video fetched (picture on): the player stopped, ytdec paused, the state buffering
@@ -1307,6 +1307,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, audio
     this.pct = 0;
     this.fetchedMs = Infinity;
     this.head = null;
+    this.nextHead = null;  // {ms, file}: a longer head the fetcher wrote meanwhile (0.3.19)
     this.headWait = false;
     this.videoWait = false;
     this.switching = false;
@@ -1354,8 +1355,9 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, audio
     try {
         await withTimeout(this.ready, 10000, 'audio service'); // never connect before the leftover sweep
         if (gen !== this.gen) return undefined;
-        if (headMs !== null && !this.fullReady) this.head = { ms: headMs };
-        await this.audio.play(path.join(dir, this.head ? 'audio.head.m4a' : 'audio.m4a'));
+        if (headMs !== null && !this.fullReady) { this.head = { ms: headMs, file: 'audio.head.m4a' }; this.promoteHead(); }
+        if (this.fullReady && this.nextHead) { try { fs.unlinkSync(path.join(dir, this.nextHead.file)); } catch (e) { /* gone */ } this.nextHead = null; }
+        await this.audio.play(path.join(dir, this.head ? this.head.file : 'audio.m4a'));
     } catch (e) {
         if (gen !== this.gen) return this.audio.release();
         return this.failPlayback(e.message);
@@ -1381,15 +1383,19 @@ Daemon.prototype.onFullAudio = function () {
 };
 // playFile(audio.m4a) on the live connection, then setTime where the head was. ytdec keeps its clock meanwhile
 // (or, waiting, is paused at elapsed), so the target is the extrapolated clock (or elapsed).
-Daemon.prototype.switchToFull = async function () {
-    const gen = this.gen, waiting = this.headWait;
+// toHead (0.3.19): the same onto the longer head the fetcher wrote meanwhile (nextHead), audio.m4a not there yet.
+Daemon.prototype.switchToFull = async function (toHead) {
+    const next = toHead ? this.nextHead : null;
+    if (toHead && !next) return undefined;
+    const gen = this.gen, waiting = this.headWait, old = this.head;
     this.switching = true;
-    this.head = null;
+    this.head = next;
+    this.nextHead = next ? null : this.nextHead;
     this.sawPlay = false;
-    this.log('audio: head -> full at ' + this.elapsed + (waiting ? ' (waiting)' : ''));
+    this.log('audio: head -> ' + (next ? 'a ' + next.ms + ' ms head' : 'full') + ' at ' + this.elapsed + (waiting ? ' (waiting)' : ''));
     let target;
     try {
-        await this.audio.replay(path.join(this.cur.dir, 'audio.m4a'));
+        await this.audio.replay(path.join(this.cur.dir, next ? next.file : 'audio.m4a'));
         if (gen !== this.gen) return undefined;
         target = waiting ? this.elapsed : this.elapsed + (Date.now() - this.lastTickAt);
         if (this.total) target = Math.min(target, Math.max(0, this.total - 1000));
@@ -1411,8 +1417,32 @@ Daemon.prototype.switchToFull = async function () {
     }
     if (this.paused) await this.hold(target); // paused during the switch: the playFile started it
     this.checkBuffering();
-    try { fs.unlinkSync(path.join(this.cur.dir, 'audio.head.m4a')); } catch (e) { /* the player keeps reading it until then */ }
+    // (the player keeps reading the old one until then)
+    [old, next ? null : this.nextHead].forEach((h) => { if (h) try { fs.unlinkSync(path.join(this.cur.dir, h.file)); } catch (e) { /* gone */ } });
+    if (!next) this.nextHead = null;
+    if (next && this.fullReady) return this.switchToFull(); // audio.m4a came during this switch
     return undefined;
+};
+// a longer head from the fetcher (audio_head with a file): kept for when the one playing runs out; waiting at its end
+// already - moved onto it at once
+Daemon.prototype.moreHead = function (h) {
+    if (this.fullReady || (this.nextHead && this.nextHead.ms >= h.ms) || (this.head && this.head.ms >= h.ms)) {
+        try { fs.unlinkSync(path.join(this.cur.dir, h.file)); } catch (e) { /* gone */ }
+        return undefined;
+    }
+    if (this.nextHead) try { fs.unlinkSync(path.join(this.cur.dir, this.nextHead.file)); } catch (e) { /* gone */ }
+    this.nextHead = h;
+    if (this.head && this.headWait && this.ticking && !this.switching && !this.paused && !this.videoWait
+        && h.ms > this.elapsed + 2 * this.opts.headMarginMs) return this.switchToFull(true);
+    return undefined;
+};
+// not playing a head file: the longest one written becomes the head (play, restart), the shorter one goes
+Daemon.prototype.promoteHead = function () {
+    const n = this.nextHead, h = this.head;
+    if (!n || !h || n.ms <= h.ms) return;
+    this.head = n;
+    this.nextHead = null;
+    try { fs.unlinkSync(path.join(this.cur.dir, h.file)); } catch (e) { /* gone */ }
 };
 // past the head before audio.m4a: pause the player and ytdec at ms, buffering until onFullAudio switches
 Daemon.prototype.waitFull = function (ms) {
@@ -1499,7 +1529,10 @@ Daemon.prototype.fetchVideo = function (id, dir, audioOnly) {
                 if (m.duration_s > 0) this.cur.durationMs = m.duration_s * 1000;
                 if (Array.isArray(m.chapters)) this.cur.chapters = m.chapters;
             } else if (m.ev === 'audio') { pct((audioOnly ? 0.99 : 0.7) * (Number(m.pct) || 0)); countAudio(m.bytes); }
-            else if (m.ev === 'audio_head' && Number(m.ms) > 0) { if (head === null) { head = Number(m.ms); if (!audioOnly) { stage('video'); pct(70); } } }
+            else if (m.ev === 'audio_head' && Number(m.ms) > 0) {
+                if (head === null) { head = Number(m.ms); if (!audioOnly) { stage('video'); pct(70); } }
+                else if (/^audio\.head\.\d+\.m4a$/.test(String(m.file))) this.moreHead({ ms: Number(m.ms), file: String(m.file) });
+            }
             else if (m.ev === 'audio_ready') {
                 audio = true;
                 if (!m.kept) countAudio(m.dl || m.bytes);
@@ -1603,7 +1636,8 @@ Daemon.prototype.restartAudio = async function () {
     try {
         await this.audio.release();
         if (gen !== this.gen) return;
-        await this.audio.play(path.join(this.cur.dir, this.head ? 'audio.head.m4a' : 'audio.m4a'));
+        this.promoteHead();
+        await this.audio.play(path.join(this.cur.dir, this.head ? this.head.file : 'audio.m4a'));
     } catch (e) {
         if (gen === this.gen) await this.failPlayback('resume: ' + e.message);
         return;
@@ -1630,7 +1664,12 @@ Daemon.prototype.seek = async function (ms) {
     this.toYtdec('seek ' + ms);
     // shortcut: once waiting, a seek back into the head still waits for audio.m4a (a few s), simpler than replaying the head
     if (this.headWait) return this.checkBuffering();
-    if (this.head && !this.switching && ms > this.head.ms - this.opts.headMarginMs) return this.waitFull(ms);
+    if (this.head && !this.switching && ms > this.head.ms - this.opts.headMarginMs) {
+        const onto = this.nextHead && this.nextHead.ms > ms + 2 * this.opts.headMarginMs;   // a longer head holds it
+        await this.waitFull(ms);
+        if (onto && this.headWait && !this.switching && this.nextHead) return this.switchToFull(true);
+        return undefined;
+    }
     if (this.stoppedAt !== null && this.stoppedAt !== undefined) { this.stoppedAt = ms; this.checkBuffering(); return undefined; } // resume() replays there
     this.checkBuffering();
     if (this.videoWait) return undefined;  // past the video fetched: the player stopped there, on once it is fetched
@@ -1683,7 +1722,9 @@ Daemon.prototype.onTime = function (v) {
     this.lastTickAt = Date.now();
     this.total = this.head ? (this.cur.durationMs || v.total) : v.total; // the head's own total is ~60 s
     if (this.head && !this.fullReady && v.elapsed >= this.head.ms - this.opts.headMarginMs) {
-        this.waitFull(v.elapsed).catch((e) => this.log(e));
+        // a longer head is there: onto it (a short hitch), else wait for audio.m4a
+        if (this.nextHead && this.nextHead.ms > v.elapsed + 2 * this.opts.headMarginMs) this.switchToFull(true).catch((e) => this.log(e));
+        else this.waitFull(v.elapsed).catch((e) => this.log(e));
         return;
     }
     if (this.startAt) { const at = this.startAt; this.startAt = null; this.seek(at).catch((e) => this.log('resume at: ' + e)); return; }

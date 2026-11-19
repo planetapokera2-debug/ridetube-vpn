@@ -680,6 +680,61 @@ async function main() {
         await stopIdle();
     });
 
+    // 0.3.19: a 15 s first head, longer ones (audio.head.<n>.m4a) while the rest comes - onto the longest, not a wait
+    await t('growing heads: the 15 s head runs out -> onto audio.head.1.m4a at the clock (no wait); audio_ready -> audio.m4a; heads removed', async () => {
+        const id = 'FFFFFFFFFG1';
+        await headPlay(id, 'grow');
+        assert.strictEqual(path.basename(called('playFile')[0].a.path), 'audio.head.m4a');
+        fs.writeFileSync(ctl, 'head2');
+        await waitUntil(() => d.nextHead && d.nextHead.ms === 120000);
+        c.clear();
+        tick(13600);                                              // within headMarginMs of the 15 s head
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('playFile').map((x) => path.basename(x.a.path)), ['audio.head.m4a', 'audio.head.1.m4a']);
+        assert.ok(called('setTime')[0].a.newTimeElapsed >= 13600 && called('setTime')[0].a.newTimeElapsed < 15000, JSON.stringify(called('setTime')[0].a));
+        assert.strictEqual(d.headWait, false, 'no wait for the sound (the buffering flag here is the fake\'s 12 s of video)');
+        assert.deepStrictEqual(called('sendButtonEvent').map((x) => x.a.button), [], 'no STOP');
+        assert.strictEqual(d.head.ms, 120000);
+        assert.strictEqual(d.nextHead, null);
+        assert.ok(!fs.existsSync(path.join(hdir(id), 'audio.head.m4a')), 'the first head removed');
+        tick(20000);
+        fs.writeFileSync(ctl, 'full');
+        await waitUntil(() => called('setTime').length === 2);
+        assert.strictEqual(path.basename(called('playFile').slice(-1)[0].a.path), 'audio.m4a');
+        assert.strictEqual(d.head, null);
+        assert.ok(!fs.existsSync(path.join(hdir(id), 'audio.head.1.m4a')), 'the longer head removed');
+        await stopIdle();
+    });
+
+    await t('growing heads: waiting at the head\'s end, a longer head arrives -> onto it at the wait point', async () => {
+        const id = 'FFFFFFFFFG2';
+        await headPlay(id, 'grow');
+        c.clear();
+        tick(13600);
+        await c.waitFor((x) => x.ev === 'state' && x.buffering === true);
+        subs.playerState('PLAYER_STATE_STOP');
+        fs.writeFileSync(ctl, 'head2');
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('setTime').map((x) => x.a.newTimeElapsed), [13600]);
+        assert.strictEqual(path.basename(called('playFile').slice(-1)[0].a.path), 'audio.head.1.m4a');
+        await waitUntil(() => ytdecIns().length === 3);
+        assert.deepStrictEqual(ytdecIns(), ['in pause', 'in seek 13600', 'in resume']);
+        assert.strictEqual(d.headWait, false);
+        await stopIdle();
+    });
+
+    await t('growing heads: a seek past the first head that the longer one holds -> onto it there', async () => {
+        const id = 'FFFFFFFFFG3';
+        await headPlay(id, 'grow');
+        fs.writeFileSync(ctl, 'head2');
+        await waitUntil(() => d.nextHead);
+        c.send({ cmd: 'seek', ms: 60000 });
+        await waitUntil(() => called('setTime').length === 1);
+        assert.deepStrictEqual(called('setTime').map((x) => x.a.newTimeElapsed), [60000]);
+        assert.strictEqual(path.basename(called('playFile').slice(-1)[0].a.path), 'audio.head.1.m4a');
+        await stopIdle();
+    });
+
     await t('preparing on the head: pct moves with the video lead', async () => {
         c.clear();
         await headPlay('FFFFFFFFFHA', 'head');

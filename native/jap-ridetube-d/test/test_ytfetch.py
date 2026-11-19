@@ -275,26 +275,33 @@ class Ranged(unittest.TestCase, Pipeline):
             def process_ie_result(self, i, download):
                 assert download is False
                 return dict(i)
-        buf, old = io.StringIO(), (ytfetch._out, ytfetch.HEAD_MIN_MS, ytfetch.AUDIO_FIRST, ytfetch.AUDIO_CHUNK)
-        ytfetch._out, ytfetch.HEAD_MIN_MS = buf, 10000
+        buf, old = io.StringIO(), (ytfetch._out, ytfetch.HEAD_FIRST_MS, ytfetch.AUDIO_FIRST, ytfetch.AUDIO_CHUNK)
+        ytfetch._out, ytfetch.HEAD_FIRST_MS = buf, 10000
         ytfetch.AUDIO_FIRST = ytfetch.AUDIO_CHUNK = 60000
         try:
             a = type('A', (), {'dir': out})()
             src = ytfetch.audio_ranged(a, Ya(), info, {'duration_s': 60})
         finally:
-            ytfetch._out, ytfetch.HEAD_MIN_MS, ytfetch.AUDIO_FIRST, ytfetch.AUDIO_CHUNK = old
+            ytfetch._out, ytfetch.HEAD_FIRST_MS, ytfetch.AUDIO_FIRST, ytfetch.AUDIO_CHUNK = old
         evs = [json.loads(x) for x in buf.getvalue().splitlines()]
         prog = [e for e in evs if e['ev'] == 'audio']
         self.assertTrue(prog and all(0 < e['bytes'] <= len(self.srv.data) for e in prog), prog)  # the traffic counter's
         heads = [e for e in evs if e['ev'] == 'audio_head']
-        self.assertEqual(len(heads), 1, evs)
+        self.assertGreaterEqual(len(heads), 2, evs)   # the first, then longer ones while the rest comes
         self.assertGreaterEqual(heads[0]['ms'], 10000)
-        self.assertEqual(sorted(os.listdir(out)), ['audio.head.m4a', 'audio.src.m4a'])
+        self.assertNotIn('file', heads[0])
+        later = heads[1:]
+        self.assertEqual([h['file'] for h in later], [f'audio.head.{n}.m4a' for n in range(1, len(heads))])
+        self.assertTrue(all(b['ms'] > a['ms'] for a, b in zip(heads, heads[1:])), heads)
+        self.assertLess(later[-1]['ms'], 60000, 'none past 3/4 of the file')
+        self.assertEqual(sorted(os.listdir(out)), sorted(['audio.head.m4a', 'audio.src.m4a'] + [h['file'] for h in later]))
         with open(src, 'rb') as f:
             self.assertEqual(f.read(), self.srv.data)
         flat = os.path.join(out, 'flat.m4a')
         ytfetch.flatten_m4a(src, flat)
         self.check_head(os.path.join(out, 'audio.head.m4a'), flat, heads[0]['ms'])
+        for h in later:
+            self.check_head(os.path.join(out, h['file']), flat, h['ms'])
         self.assertIsNone(ytfetch.audio_ranged(a, Ya(), dict(info, protocol='m3u8_native'), {'duration_s': 60}))
         self.srv.ranges = False  # every range answered 200: it fails, and leaves no src for yt-dlp to skip
         try:

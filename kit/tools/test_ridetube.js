@@ -1003,6 +1003,90 @@ async function appFrames() {
         disp.closeSheet();
         hu.ctx.settings.set('quality', 'auto');
         console.log('ok   Settings page: quality for the next video (this one only when asked), the way and the speed check, the switches');
+        // My queue (0.3.20): the rail's Queue; Pick videos, then a tap on a tile adds it (its place on it), again removes it - no play;
+        // Play the queue plays the first, the next of it follows at the end; a played one leaves it; Clear takes two presses; kept
+        const tap = (k) => { const t = disp.pageTargets.find((x) => x.key === k); assert.ok(t, k + ': ' + keys()); return t.run(); };
+        const qfile = path.join(dir, 'queue.json'), qids = () => JSON.parse(fs.readFileSync(qfile, 'utf8')).map((r) => r.id);
+        d.send({ ev: 'state', state: 'idle', version: '0.3.19' });
+        d.send({ ev: 'results', q: d.cmds('search').slice(-1)[0].q, items: ['QQQQQQQQQQ1', 'QQQQQQQQQQ2', 'QQQQQQQQQQ3'].map((id) => ({ id: id, title: 'Song ' + id.slice(-1), channel: 'Band', duration_s: 200 })) });
+        hu.handlers.BTN_RESULTS();
+        await sleep(100); await hu.loopFn();
+        assert.ok(keys().indexOf('rail:queue') >= 0, 'Queue on the rail: ' + keys().filter((k) => /^rail:/.test(k)));
+        tap('rail:queue');
+        await sleep(100); said.length = 0; await hu.loopFn();
+        assert.ok(said.indexOf('My queue') >= 0 && keys().indexOf('q:0:::play') < 0, 'empty: no Play: ' + said.join('|'));
+        tap('q:0:::pick');
+        await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(said.indexOf('Picking: on') >= 0, 'Pick videos: on: ' + said.join('|'));
+        hu.handlers.BTN_RESULTS();
+        await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(said.some((x) => /^Picking for the queue: tap videos to add them · in the queue 0/.test(x)), 'the banner on the other pages: ' + said.join('|'));
+        const nPlayQ = d.cmds('play').length;
+        ['QQQQQQQQQQ1', 'QQQQQQQQQQ3', 'QQQQQQQQQQ2'].forEach((id) => tap('r:0:' + id));
+        tap('r:0:QQQQQQQQQQ2');                                         // again: out
+        await sleep(300); said.length = 0; await hu.loopFn();
+        assert.strictEqual(d.cmds('play').length, nPlayQ, 'picking: a tap adds, plays nothing');
+        await shot('queue-picking', () => {});
+        assert.deepStrictEqual(qids(), ['QQQQQQQQQQ1', 'QQQQQQQQQQ3'], 'kept in data/queue.json, the second tap removed one');
+        assert.ok(said.indexOf('1') >= 0 && said.indexOf('2') >= 0, 'their places on the tiles: ' + said.join('|'));
+        tap('rail:queue');
+        await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(keys().indexOf('q:1:QQQQQQQQQQ1') >= 0 && keys().indexOf('q:1:QQQQQQQQQQ3') >= 0, 'the queue\'s videos: ' + keys());
+        await shot('queue', () => {});
+        tap('q:0:::play');
+        await until(() => (d.cmds('play').slice(-1)[0] || {}).id === 'QQQQQQQQQQ1', 2000, 'Play the queue: its first');
+        assert.deepStrictEqual(qids(), ['QQQQQQQQQQ3'], 'the one playing left the queue');
+        d.send({ ev: 'state', state: 'playing', id: 'QQQQQQQQQQ1' });
+        await sleep(100); await hu.loopFn();
+        d.send({ ev: 'state', state: 'ended', id: 'QQQQQQQQQQ1' });
+        await sleep(100); await hu.loopFn();
+        if (keys().indexOf('ov:qrcard') >= 0) { tap('ov:qrcard'); await sleep(100); await hu.loopFn(); }   // (the phone card a test before left open)
+        await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(said.some((x) => /^Up next in \d s: Song 3$/.test(x)), 'the queue\'s next counted down: ' + said.join('|'));
+        for (let k = 0; k < 40 && (d.cmds('play').slice(-1)[0] || {}).id !== 'QQQQQQQQQQ3'; k++) { await sleep(200); await hu.loopFn(); }
+        assert.strictEqual((d.cmds('play').slice(-1)[0] || {}).id, 'QQQQQQQQQQ3', 'at the end: the queue\'s next');
+        assert.deepStrictEqual(qids(), [], 'and the queue is empty');
+        // Clear: picked again (Play the queue turned picking off), two presses
+        hu.handlers.BTN_RESULTS(); await sleep(300); await hu.loopFn();
+        tap('rail:queue'); await sleep(300); await hu.loopFn();
+        tap('q:0:::pick');
+        hu.handlers.BTN_RESULTS(); await sleep(300); await hu.loopFn();
+        tap('r:0:QQQQQQQQQQ2');
+        tap('rail:queue'); await sleep(300); await hu.loopFn();
+        tap('q:0:::pick');                                              // picking off
+        await sleep(300); await hu.loopFn();
+        tap('q:0:::clear'); await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(said.indexOf('Press again to clear') >= 0 && qids().length === 1, 'one press: asks again');
+        tap('q:0:::clear'); await sleep(300); await hu.loopFn();
+        assert.deepStrictEqual(qids(), [], 'two: cleared');
+        hu.handlers.BTN_RESULTS(); await sleep(100); await hu.loopFn();
+        const nP2 = d.cmds('play').length;
+        tap('r:0:QQQQQQQQQQ2');
+        await until(() => d.cmds('play').length > nP2, 2000, 'picking off: a tap plays again');
+        console.log('ok   my queue: pick on any page (a tap adds, again removes), play it in order, Clear twice, kept in data/');
+        // the sleep timer (Settings): off -> 15 -> 30 -> 60 min -> to the video's end -> off; at its time a pause; to the end: nothing follows
+        d.send({ ev: 'state', state: 'playing', id: 'QQQQQQQQQQ2' });
+        tap('rail:settings'); await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(said.indexOf('Sleep timer: off') >= 0, said.join('|'));
+        const labelsS = [];
+        for (let k = 0; k < 5; k++) { tap('set:sleep'); await sleep(300); said.length = 0; await hu.loopFn(); labelsS.push(said.find((x) => /^Sleep timer: /.test(x))); }
+        assert.deepStrictEqual(labelsS, ['Sleep timer: 15 min', 'Sleep timer: 30 min', 'Sleep timer: 60 min', 'Sleep timer: to the video\'s end', 'Sleep timer: off']);
+        tap('set:sleep');                                               // 15 min
+        const realNow = Date.now, nPz = d.cmds('pause').length;
+        Date.now = () => realNow() + 16 * 60000;
+        try { await until(() => d.cmds('pause').length > nPz, 2500, 'the timer\'s time: a pause'); } finally { Date.now = realNow; }
+        await sleep(300); said.length = 0; await hu.loopFn();
+        assert.ok(said.indexOf('Sleep timer: off') >= 0, 'done: off again');
+        for (let k = 0; k < 4; k++) tap('set:sleep');                   // to the video's end
+        hu.handlers.BTN_RESULTS(); await sleep(100); await hu.loopFn();
+        tap('r:0:QQQQQQQQQQ1');                                         // the row: QQQQQQQQQQ2 would follow
+        await until(() => (d.cmds('play').slice(-1)[0] || {}).id === 'QQQQQQQQQQ1', 2000, 'played');
+        d.send({ ev: 'state', state: 'playing', id: 'QQQQQQQQQQ1' });
+        d.send({ ev: 'state', state: 'ended', id: 'QQQQQQQQQQ1' });
+        const nP3 = d.cmds('play').length;
+        for (let k = 0; k < 30; k++) { await sleep(200); await hu.loopFn(); }
+        assert.strictEqual(d.cmds('play').length, nP3, 'to the video\'s end: the next does not start: ' + JSON.stringify(d.cmds('play').slice(-2)));
+        console.log('ok   sleep timer: the chip cycles, a pause at its time, to the end: nothing follows');
         // Exit: the last on the rail and in the HMI menu; the video stops (the daemon releases the sound), the screens close
         d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP' });
         hu.handlers.BTN_RESULTS();

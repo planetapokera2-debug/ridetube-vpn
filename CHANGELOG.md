@@ -1,5 +1,26 @@
 # Changelog
 
+## App 0.3.20, service 0.3.19 (VPN build, modified version)
+
+- Faster start (owner, 19.11.2026: a long video sat on «Загрузка звука…» for a long time). The service started only
+  once the first part of the sound covered the whole download's estimated time, and it estimated that time from a
+  single connection, although the rest comes over four. For an hour-long video over the VPN that meant half a minute
+  or more. Now it starts with 15 s of sound. While the rest comes, longer parts follow (audio.head.<n>.m4a, each twice
+  as long), and the service moves to the longest one when the part playing runs out: a short hitch instead of a wait.
+- My queue (the rail's «Очередь»):
+  - «Набрать видео», then a tap on a tile on any page adds it to the queue (its place shows on the tile); a second tap
+    removes it.
+  - «Смотреть очередь» plays the videos one after another; a video that plays leaves the queue.
+  - «Очистить» takes two presses.
+  - The queue is kept in data/queue.json.
+- Sleep timer (Settings): 15 / 30 / 60 min or to the video's end. At its time playback pauses; set to the video's end,
+  the next video does not start.
+- The rail fits eight entries.
+- Tests:
+  - the daemon: the longer head when the one playing runs out, when waiting at its end, and on a seek;
+  - the fetcher: heads of a growing prefix, each a valid MP4;
+  - the app: the queue (pick, unpick, play in order, Clear twice), the sleep timer (the chip, the pause, to the end).
+
 ## App 0.3.19 (VPN build, modified version; the service stays 0.3.18)
 
 - After a Store update the pages say for two minutes (from the first look at the screen) that the settings came back

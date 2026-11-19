@@ -49,7 +49,10 @@ DEFAULT_CHECK_ID = 'dQw4w9WgXcQ'  # 3:33, avc1 720p 25 fps, AAC-LC 140: public a
 AUDIO_FMT = 'ba[ext=m4a][acodec^=mp4a.40.2][format_note*=original]/ba[ext=m4a][acodec^=mp4a.40.2]/ba[ext=m4a]/ba'
 # audio: parallel Range requests (googlevideo paces each connection), in file order so the prefix grows first
 AUDIO_CONNS, AUDIO_FIRST, AUDIO_CHUNK = 4, 1 << 20, 2 << 20
-HEAD_MIN_MS = 60000  # audio.head.m4a covers at least this, and 1.5x the rest's estimated download time
+# the first head: this much sound, and playback starts (owner 19.11.2026: a long video waited half a minute and more for a
+# head covering the whole download's estimated time). Later heads (audio.head.<n>.m4a, each covering twice as much) follow
+# while the rest comes with all the connections; the daemon moves to the longest when the one playing runs out.
+HEAD_FIRST_MS = 15000
 
 
 def video_fmt(h):
@@ -787,17 +790,18 @@ def extract_cmd(a):
 
 
 def audio_ranged(a, ya, info, meta):
-    """The audio format yt-dlp picks, fetched with ranged_get; audio.head.m4a + audio_head once the prefix
-    covers max(HEAD_MIN_MS, 1.5x the rest's estimated time). None when the format is not plain https with a size."""
+    """The audio format yt-dlp picks, fetched with ranged_get. audio.head.m4a + audio_head {ms, bytes} once the prefix
+    holds HEAD_FIRST_MS of sound; then audio.head.<n>.m4a + audio_head {ms, bytes, file} each time the prefix doubles
+    (not past 3/4 of the file: audio_ready is near). None when the format is not plain https with a size."""
     f = ya.process_ie_result(copy.deepcopy(info), download=False)
     f = (f.get('requested_downloads') or [f])[0]
     total = f.get('filesize')
     if f.get('protocol') not in ('https', 'http') or not total or not f.get('url'):
         return None
     src = os.path.join(a.dir, 'audio.src.m4a')
-    head, head_part = os.path.join(a.dir, 'audio.head.m4a'), os.path.join(a.dir, 'audio.head.m4a.part')
+    head_part = os.path.join(a.dir, 'audio.head.m4a.part')
     dur_ms = (meta['duration_s'] or 0) * 1000
-    t0, tick, st = time.monotonic(), Throttle(), {'head': None}
+    tick, st = Throttle(), {'head': None, 'n': 0, 'at': 0}   # head: its ms (0: a plain MP4, no heads); at: its prefix
     # one connection until the head: four take the link from the video's start (measured: head 8 s, not 18 s)
     gate = threading.Event()
 
@@ -806,25 +810,37 @@ def audio_ranged(a, ya, info, meta):
             gate.set()
         if tick():
             emit(ev='audio', pct=min(100, round(done * 100 / total)), bytes=done)
-        if st['head'] is not None or not prefix or prefix >= total:
+        first = st['head'] is None
+        if st['head'] == 0 or not prefix or prefix >= total:
             return
-        rate = done / max(time.monotonic() - t0, 0.1)
-        need = max(HEAD_MIN_MS, 1500 * (total - done) / rate)
+        if not first and (prefix < 2 * st['at'] or prefix > total * 3 // 4):
+            return
         try:
             r = flatten_m4a(src, head_part, limit=prefix)
         except (ValueError, struct.error, OSError) as e:
             print(f'head at {prefix}: {e}', file=sys.stderr, flush=True)
-            gate.set()
+            if first:
+                gate.set()
+            else:
+                st['at'] = prefix   # not again before it doubles
             return
         if r is None:
             st['head'] = 0  # a plain MP4: no head, audio_ready only
             gate.set()
             return
-        if r[1] >= min(need, dur_ms or need):
-            os.replace(head_part, head)
-            st['head'] = r[1]
-            gate.set()
+        if first and r[1] < min(HEAD_FIRST_MS, dur_ms or HEAD_FIRST_MS):
+            return
+        if not first and r[1] <= st['head']:
+            st['at'] = prefix
+            return
+        name = 'audio.head.m4a' if first else f'audio.head.{st["n"]}.m4a'
+        os.replace(head_part, os.path.join(a.dir, name))
+        st['head'], st['at'], st['n'] = r[1], prefix, st['n'] + 1
+        gate.set()
+        if first:
             emit(ev='audio_head', ms=r[1], bytes=r[0])
+        else:
+            emit(ev='audio_head', ms=r[1], bytes=r[0], file=name)
 
     ctx = ssl.create_default_context(cafile=CA if os.path.isfile(CA) else None)
     try:
