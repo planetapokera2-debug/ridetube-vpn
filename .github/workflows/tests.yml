@@ -1,0 +1,39 @@
+# Тесты на каждый push: приложение на Node 22 и Node 8.16.2 (как на голове), служба на Node 22 (jap-node22) и Python.
+name: Тесты
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Node 8.16.2 (как на голове)
+        run: |
+          curl -fsSL https://nodejs.org/dist/v8.16.2/node-v8.16.2-linux-x64.tar.xz | tar -xJ -C "$HOME"
+          echo "NODE8=$HOME/node-v8.16.2-linux-x64/bin/node" >> "$GITHUB_ENV"
+      - name: Исходный пакет приложения (JustAnotherPU, 0.3.8) и сборка для тестов
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/upstream
+          gh release download catalog -R JustAnotherPU/ridetube -p 'jap_ridetube@0.3.8.tgz' -D dist/upstream
+          echo "44bd9ee5f0d0f42cd606a36bbb674817beade431f9fcaf205aef590fff279fce  dist/upstream/jap_ridetube@0.3.8.tgz" | sha256sum -c
+          sh tools/stage_for_tests.sh
+      - name: Приложение, Node 22
+        run: for t in kit/tools/test_*.js; do echo "== $t"; node "$t"; done
+      - name: Приложение, Node 8
+        run: for t in kit/tools/test_*.js; do echo "== $t"; "$NODE8" "$t"; done
+      - name: Служба
+        working-directory: native/jap-ridetube-d
+        run: |
+          for t in test/test_*.js; do echo "== $t"; node "$t"; done
+          python3 -m unittest discover -s test -p 'test_ytfetch.py'
