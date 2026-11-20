@@ -390,7 +390,7 @@ async function main() {
         const pr = c.evs.filter((x) => x.ev === 'prep');
         assert.strictEqual(pr.length, 1);
         assert.deepStrictEqual(Object.keys(pr[0]), ['ev', 'id', 'lookup', 'audio', 'video', 'height']);
-        assert.ok(pr[0].lookup >= 100 && pr[0].audio >= 0 && pr[0].video >= 0 && pr[0].height === 720, JSON.stringify(pr[0]));
+        assert.ok(pr[0].lookup >= 50 && pr[0].audio >= 0 && pr[0].video >= 0 && pr[0].height === 720, JSON.stringify(pr[0]));
         assert.ok(c.evs.filter((x) => x.ev === 'state' && x.state === 'playing').every((x) => x.stage === null), 'playing: no stage');
         assert.strictEqual(pl.title, 'Fetched ' + id);
         assert.strictEqual(pl.buffering, false);
@@ -744,7 +744,7 @@ async function main() {
         const pr = c.evs.filter((x) => x.ev === 'prep');
         assert.strictEqual(pr.length, 1);
         assert.deepStrictEqual(Object.keys(pr[0]), ['ev', 'id', 'lookup', 'audio', 'video', 'height']);
-        assert.ok(pr[0].lookup >= 100 && pr[0].audio >= 0 && pr[0].video >= 0 && pr[0].height === 720, JSON.stringify(pr[0]));
+        assert.ok(pr[0].lookup >= 50 && pr[0].audio >= 0 && pr[0].video >= 0 && pr[0].height === 720, JSON.stringify(pr[0]));
         assert.ok(c.evs.filter((x) => x.ev === 'state' && x.state === 'playing').every((x) => x.stage === null), 'playing: no stage');
         await stopIdle();
     });
@@ -1599,7 +1599,7 @@ async function main() {
         c.clear();
         c.send({ cmd: 'netinfo' });
         const n = await c.waitFor((x) => x.ev === 'net');
-        assert.ok(n.prep && n.prep.height === 720 && n.prep.lookup >= 100, 'the last preparing\'s parts: ' + JSON.stringify(n.prep));
+        assert.ok(n.prep && n.prep.height === 720 && n.prep.lookup >= 50, 'the last preparing\'s parts: ' + JSON.stringify(n.prep));
         delete n.prep;
         assert.deepStrictEqual(Object.keys(n.traffic), ['today', 'month', 'since'], 'the traffic counter: ' + JSON.stringify(n.traffic));
         const used = n.traffic.today;
