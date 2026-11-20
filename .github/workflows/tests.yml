@@ -32,6 +32,8 @@ jobs:
         run: for t in kit/tools/test_*.js; do echo "== $t"; node "$t"; done
       - name: Приложение, Node 8
         run: for t in kit/tools/test_*.js; do echo "== $t"; "$NODE8" "$t"; done
+      - name: ffmpeg (картинки для теста миниатюр)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Служба
         working-directory: native/jap-ridetube-d
         run: |
