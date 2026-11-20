@@ -1,5 +1,10 @@
 # Changelog
 
+## App 0.3.23 (VPN build, modified version)
+
+- The icon the owner chose (20.11.2026, «Т9 Старт» of the logo canvas): the engine START button, a play mark in place
+  of the word; in the Store and the car's app list (apps/jap_ridetube/icon.svg, icon.png 140 px).
+
 ## App 0.3.22 (VPN build, modified version)
 
 - Its own icon (owner, 19.11.2026): a big «Т», its bar a screen with the play mark, its stem the road

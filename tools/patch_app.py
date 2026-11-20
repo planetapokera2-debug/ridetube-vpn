@@ -39,7 +39,7 @@ def main():
     spec = json.loads(members['package/javascript/kit/app-spec.json'][1])
     spec['settings'] = app['settings']      # (the published ones, with the VPN build's defaults and additions)
     put('package/javascript/kit/app-spec.json', json.dumps(spec, indent=1).encode('utf-8'))
-    # ТвойТюб (0.3.22): our own icon in the car's app list (apps/jap_ridetube/icon.png, 140 px, from icon.svg)
+    # ТвойТюб (0.3.22, «Т9 Старт» since 0.3.23): our own icon in the car's app list (apps/jap_ridetube/icon.png, 140 px, from icon.svg)
     put('package/rhmiData/variantGroups/Common/images/jap_ridetube_icon.png', open(os.path.join(APP, 'icon.png'), 'rb').read())
     # Russian (VPN build): the app's words (tr.js + ru.json), the kit's (locale.json: the settings, the sheets;
     # whole texts only), the HMI's static texts in every language file

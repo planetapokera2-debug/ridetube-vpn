@@ -1,36 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- ТвойТюб (0.3.22): a big «Т» - its bar a glowing screen with the play mark, its stem the road running down to you. -->
+  <!-- ТвойТюб (0.3.23, «Т9 Старт», chosen 20.11.2026): the engine START button, a play mark in place of the word. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1d1247"/>
-      <stop offset="1" stop-color="#070a18"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.34" r="0.6">
-      <stop offset="0" stop-color="#ff3f8e" stop-opacity="0.45"/>
-      <stop offset="1" stop-color="#ff3f8e" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffc35a"/>
-      <stop offset="1" stop-color="#ff3f8e"/>
-    </linearGradient>
-    <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3ad6ff"/>
-      <stop offset="1" stop-color="#b8f4ff"/>
-    </linearGradient>
-    <clipPath id="tile"><rect x="8" y="8" width="240" height="240" rx="54"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c303b"/><stop offset="1" stop-color="#0e1015"/></linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f1f4f8"/><stop offset="1" stop-color="#7d8697"/></linearGradient>
   </defs>
   <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"/>
-  <g clip-path="url(#tile)">
-    <rect x="0" y="0" width="256" height="256" fill="url(#glow)"/>
-    <!-- the stem: the road, wider near you, cut by the tile's edge -->
-    <path d="M108 112 L148 112 L190 256 L66 256 Z" fill="url(#road)"/>
-    <g fill="#0b1030">
-      <rect x="124.5" y="140" width="7" height="20" rx="3.5"/>
-      <rect x="123.5" y="176" width="9" height="26" rx="4.5"/>
-      <rect x="122.5" y="218" width="11" height="34" rx="5.5"/>
-    </g>
-  </g>
-  <!-- the bar: the screen -->
-  <rect x="34" y="40" width="188" height="84" rx="24" fill="url(#screen)"/>
-  <path d="M114 63 Q114 56 120.5 59.6 L148 75.5 Q154 82 148 88.5 L120.5 104.4 Q114 108 114 101 Z" fill="#0b1030"/>
+  <circle cx="128" cy="128" r="86" fill="url(#metal)"/>
+  <circle cx="128" cy="128" r="72" fill="#14171e"/>
+  <circle cx="128" cy="128" r="62" fill="none" stroke="#ff7a1a" stroke-width="4"/>
+  <path d="M114 104 L114 152 L156 128 Z" fill="#ff7a1a" stroke="#ff7a1a" stroke-width="10" stroke-linejoin="round"/>
 </svg>
