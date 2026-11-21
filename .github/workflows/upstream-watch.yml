@@ -1,0 +1,48 @@
+# Оригинальный RideTube (JustAnotherPU/ridetube) каждый день: у автора новая версия приложения или службы - задача в этом
+# репозитории (GitHub пришлёт письмо): что вышло, и не догнал ли его номер наш. id у нас те же, поэтому Store, где
+# подключён и его источник, ставит ту, что новее; с 10.0.0 наш номер намного выше, задача «СРОЧНО» - если он догонит.
+name: Оригинальный RideTube (новая версия)
+on:
+  schedule:
+    - cron: '27 5 * * *'        # каждый день, 08:27 по Москве
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Версии автора против наших
+        run: |
+          mkdir -p "$RUNNER_TEMP/up"
+          gh release download catalog -R JustAnotherPU/ridetube -p catalog.json -D "$RUNNER_TEMP/up"
+          python3 - "$RUNNER_TEMP/up/catalog.json" > "$RUNNER_TEMP/plan.txt" <<'PY'
+          import json, sys
+          up = {c['id']: c['version'] for c in json.load(open(sys.argv[1])).get('components', [])}
+          ours = {'jap_ridetube': json.load(open('apps/jap_ridetube/app.json'))['version'],
+                  'jap-ridetube-d': json.load(open('native/jap-ridetube-d/component.json'))['version']}
+          v = lambda s: tuple(int(x) for x in s.split('.')[:3])
+          for i in ('jap_ridetube', 'jap-ridetube-d'):
+              if i in up:
+                  print('%s\t%s\t%s\t%s' % (i, up[i], ours[i], 'urgent' if v(up[i]) >= v(ours[i]) else 'news'))
+          PY
+          cat "$RUNNER_TEMP/plan.txt"
+          NAMES='jap_ridetube=приложение jap-ridetube-d=служба'
+          while IFS="$(printf '\t')" read -r ID UPV OURV KIND; do
+            [ -n "$ID" ] || continue
+            WHAT=$(echo "$NAMES" | tr ' ' '\n' | sed -n "s/^$ID=//p")
+            TITLE="RideTube автора: $WHAT $UPV"
+            HAVE=$(gh issue list -R "$GITHUB_REPOSITORY" --state all --limit 300 --json title --jq "[.[] | select(.title | startswith(\"$TITLE\"))] | length")
+            if [ "$KIND" = "urgent" ]; then
+              URG=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --limit 300 --json title --jq "[.[] | select(.title | startswith(\"СРОЧНО: $TITLE\"))] | length")
+              [ "$URG" = "0" ] || continue
+              gh issue create -R "$GITHUB_REPOSITORY" --title "СРОЧНО: $TITLE не ниже нашего $OURV" --body "У автора ($ID) вышла $UPV, у нас $OURV. Store, где подключён его источник (JustAnotherPU/ridetube), поставит его версию поверх ТвойТюба: пропадут VPN, название и наши функции. Скажите Claude «поднять номер ТвойТюба выше автора». Что нового у автора: https://github.com/JustAnotherPU/ridetube/blob/main/CHANGELOG.md"
+            elif [ "$HAVE" = "0" ]; then
+              gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE (у нас $OURV)" --body "У автора оригинального RideTube вышла новая версия ($ID $UPV). Наш номер выше ($OURV), Store её не поставит. Что нового: https://github.com/JustAnotherPU/ridetube/blob/main/CHANGELOG.md - если что-то нужно в ТвойТюбе, скажите Claude, что перенести."
+            fi
+          done < "$RUNNER_TEMP/plan.txt"
