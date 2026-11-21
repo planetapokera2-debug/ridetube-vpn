@@ -933,6 +933,51 @@ async function main() {
         await waitDone();
     });
 
+    await t('video wait, a link slower than the video (10.0.0): a step lower for the rest of it, the sound kept, the app told; a fast link only waits; Auto starts the next one lower, a set quality not', async () => {
+        // a fast link: the wait as before (10 s ahead, then on), the time events say where it waits to
+        await waitPlay('FFFFFFFFVW5');
+        d.cur.rateX = 2;
+        tick(11500);
+        await waitUntil(() => d.videoWait);
+        const tw = await c.waitFor((x) => x.ev === 'time' && x.wait_to === 21500, 3000);
+        assert.strictEqual(tw.fetched, 12000);
+        assert.ok(!c.evs.some((x) => x.ev === 'stepdown'), 'a fast link: no step-down');
+        assert.strictEqual(d.cur.height, 720);
+        await waitDone();
+        // the link gives 0.9 s of 720p a second: the wait steps down to 480p at once (--height 480, --keep-audio)
+        await waitPlay('FFFFFFFFVW6');
+        d.slow = null;
+        d.cur.rateX = 0.9;
+        c.clear();
+        tick(11500);
+        const sd = await c.waitFor((x) => x.ev === 'stepdown', 3000);
+        assert.deepStrictEqual([sd.id, sd.from, sd.to, sd.x], ['FFFFFFFFVW6', 720, 480, 0.9]);
+        await waitUntil(() => d.cur && d.cur.height === 480 && d.state === 'playing' && !d.videoWait, 4000);
+        await waitUntil(() => fetchLog().argv[fetchLog().argv.indexOf('--height') + 1] === '480', 4000);
+        assert.ok(fetchLog().argv.indexOf('--keep-audio') >= 0, 'the sound kept: ' + fetchLog().argv.join(' '));
+        assert.strictEqual(d.cur.height, 480);
+        // 480p too slow as well: 360p; at 360p no lower
+        d.cur.rateX = 0.8;
+        assert.strictEqual(d.stepDown(), true);
+        await waitUntil(() => d.cur && d.cur.height === 360 && d.state === 'playing', 4000);
+        d.cur.rateX = 0.5;
+        assert.strictEqual(d.stepDown(), false, '360p: the lowest');
+        await stopIdle();
+        // the next video: Auto starts at the step-down's height while the link was slow; a set quality as set
+        assert.strictEqual(d.heightFor('auto'), 360);
+        assert.strictEqual(d.heightFor('720'), 720);
+        c.clear();
+        c.send({ cmd: 'play', id: 'FFFFFFFFVW7', rect: '1280x720' });
+        await c.waitFor((x) => x.ev === 'state' && x.state === 'playing', 4000);
+        assert.strictEqual(d.cur.height, 360);
+        assert.strictEqual(fetchLog().argv[fetchLog().argv.indexOf('--height') + 1], '360');
+        await stopIdle();
+        d.slow.until = Date.now() - 1;                            // half an hour later: Auto as before
+        assert.strictEqual(d.heightFor('auto'), 720);
+        d.slow = null;
+        d.opts.videoWait = false;
+    });
+
     await t('zoom while playing: ytdec again with the other mode at the clock, no error; same mode does nothing', async () => {
         await sleep(300); fs.writeFileSync(ytlog, ''); setMode('ok');
         await playing();

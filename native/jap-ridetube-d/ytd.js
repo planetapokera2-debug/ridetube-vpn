@@ -19,7 +19,7 @@ const readline = require('readline');
 const socksLib = require('./socks');
 
 // said in every state event: the app tells the owner when the service is older than it needs (component.json's; a test checks)
-const VERSION = '0.3.19';
+const VERSION = '10.0.0';
 const ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SOURCE_ID = 1046, SINK_ID = 1024;
 const MEDIA_FILES = ['audio.m4a', 'index.bin', 'video.h264'];
@@ -55,6 +55,8 @@ function defaults() {
         startVideoMs: 6000,  // video fetched ahead before playback starts (later the buffering pause covers a slow link)
         videoWait: true,     // past the video fetched with the picture on: the sound waits for it (checkBuffering)
         aheadMs: 10000,      // ... and plays again with this much fetched ahead
+        stepDownX: 1.15,     // 10.0.0: a wait while the link gives the video slower than this (media s per s): a lower height
+        slowCapMs: 1800000,  // ... and Auto starts the next videos at that height for this long (the link is slow now)
         fetchRetryMs: [3000, 8000], // a fetch failing before playback (the network): tried again after these waits
         spare: true,         // keep a ytfetch.py serve (yt-dlp loaded) waiting while the app is in use
         warmMs: 600000,      // ... for this long after the app's last command
@@ -1189,7 +1191,7 @@ Daemon.prototype.checkBuffering = function () {
         if (!this.fetcher || !this.videoOn || !this.child || this.fetchedMs >= this.elapsed + this.opts.aheadMs) this.endVideoWait();
         else if (Date.now() - this.lastTimeEv >= 500) {     // no ticks while stopped: the app's bar follows the fetch
             this.lastTimeEv = Date.now();
-            this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total, fetched: this.fetchedMs });
+            this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total, fetched: this.fetchedMs, wait_to: this.elapsed + this.opts.aheadMs });
         }
     } else if (this.opts.videoWait && this.state === 'playing' && this.videoOn && this.child && this.fetcher && !this.headWait && !this.switching
         && (this.stoppedAt === null || this.stoppedAt === undefined) && this.elapsed + 1000 > this.fetchedMs) this.startVideoWait();
@@ -1201,7 +1203,23 @@ Daemon.prototype.startVideoWait = function () {
     this.toYtdec('pause');
     this.hold(this.elapsed).catch((e) => this.log(e));
     this.lastTimeEv = Date.now();     // the app's bar: where it waits, how far the fetch is
-    this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total, fetched: this.fetchedMs });
+    this.emit({ ev: 'time', elapsed: this.elapsed, total: this.total, fetched: this.fetchedMs, wait_to: this.elapsed + this.opts.aheadMs });
+    this.stepDown();
+};
+// 10.0.0 (owner, 21.11.2026: a 720p video froze for seconds at 0:38 with 0:46 fetched, and would again every ~10 s):
+// a wait while this video comes slower than it plays (stepDownX) is a link too slow for its height, not a seek: fetched
+// again a step lower (720 -> 480 -> 360) for the rest of it, the sound kept (requality), and Auto starts the next
+// videos there for slowCapMs. A link fast enough: the wait as before (10 s ahead, then on).
+Daemon.prototype.stepDown = function () {
+    const c = this.cur, x = c && c.rateX;
+    if (!c || c.audioOnly || !(c.height > 360) || !(x > 0) || x >= this.opts.stepDownX || c.stepping) return false;
+    const to = c.height > 480 ? 480 : 360;
+    c.stepping = true;
+    this.log('video: the link gives ' + Math.round(x * 100) / 100 + 'x of ' + c.height + 'p: ' + to + 'p for the rest of it');
+    this.slow = { height: to, until: Date.now() + this.opts.slowCapMs };
+    this.emit({ ev: 'stepdown', id: c.id, from: c.height, to: to, x: Math.round(x * 100) / 100 });
+    this.requality(String(to)).catch((e) => this.log('step-down: ' + e.message));
+    return true;
 };
 // fetched far enough (or the fetch ended, or the picture went off): the player again where it stopped, as resume()
 Daemon.prototype.endVideoWait = function () {
@@ -1298,7 +1316,7 @@ Daemon.prototype.play = async function (id, rect, fill, at, quality, skip, audio
     try { fs.chmodSync(dir, VIDEO_DIR_MODE); } catch (e) { /* not fetched yet: fetchVideo makes it */ }   // (0700 before 0.3.9)
     const meta0 = readMeta(dir, id);
     audioOnly = !!audioOnly && !isPlayable(dir);
-    this.cur = { id: id, audioOnly: audioOnly, title: meta0.title, durationMs: meta0.duration_s > 0 ? meta0.duration_s * 1000 : undefined, dir: dir, rect: rect, fill: fill, gen: gen, height: qualityHeight(quality, readJson(this.opts.leaseFile)),
+    this.cur = { id: id, audioOnly: audioOnly, title: meta0.title, durationMs: meta0.duration_s > 0 ? meta0.duration_s * 1000 : undefined, dir: dir, rect: rect, fill: fill, gen: gen, height: this.heightFor(quality),
         skip: Array.isArray(skip) ? skip.filter((x) => typeof x === 'string') : null, chapters: (readJson(path.join(dir, 'meta.json')) || {}).chapters };
     const was = this.positions()[id];
     // where it was left (here, else YouTube's own position the tile carried: at): seek there on the first tick
@@ -1699,9 +1717,15 @@ Daemon.prototype.fullVideo = async function (quality) {
     await this.stop(null);
     return this.play(c.id, c.rect, c.fill, null, quality, c.skip, false);
 };
+// the height a play fetches: the app's quality; Auto capped while the link was too slow for more (a step-down, 10.0.0)
+Daemon.prototype.heightFor = function (quality) {
+    const h = qualityHeight(quality, readJson(this.opts.leaseFile));
+    const auto = [360, 480, 720].indexOf(Number(quality)) < 0, slow = this.slow;
+    return auto && slow && Date.now() < slow.until && slow.height < h ? slow.height : h;
+};
 Daemon.prototype.requality = async function (quality) {
     const c = this.cur;
-    if (!c || c.audioOnly || qualityHeight(quality, readJson(this.opts.leaseFile)) === c.height) return undefined;
+    if (!c || c.audioOnly || this.heightFor(quality) === c.height) return undefined;
     await this.stop(null);
     try { fs.unlinkSync(path.join(c.dir, 'video.h264')); } catch (e) { /* still fetching (.part) */ }   // the sound stays: fetchVideo keeps it
     return this.play(c.id, c.rect, c.fill, null, quality, c.skip);
@@ -1777,6 +1801,7 @@ Daemon.prototype.rate = function (bytes) {
     const dt = now - c.rate0.t;
     if (dt < 2000) return;
     this.videoRate = { mbps: Math.round((bytes - c.rate0.b) * 8 / dt / 100) / 10, x: Math.round((this.fetchedMs - c.rate0.ms) / dt * 10) / 10, height: c.height || null };
+    c.rateX = (this.fetchedMs - c.rate0.ms) / dt;     // this video's own (the wait's step-down reads it)
 };
 // ---- how much was fetched (0.3.17): the sound and the video of every play, the speed check's download; a day each,
 // 62 days kept (traffic.json beside positions.json). Feeds, searches and thumbnails are not counted (small).
@@ -1813,7 +1838,7 @@ Daemon.prototype.trafficInfo = function () {
 };
 Daemon.prototype.netInfo = function () {
     const lease = readJson(this.opts.leaseFile) || {};
-    this.emit({ ev: 'net', via: this.socks() ? 'vpn' : 'direct', iface: typeof lease.interface === 'string' ? lease.interface : null, auto: qualityHeight('auto', lease),
+    this.emit({ ev: 'net', via: this.socks() ? 'vpn' : 'direct', iface: typeof lease.interface === 'string' ? lease.interface : null, auto: this.heightFor('auto'),
         video: this.videoRate || null, speed: this.lastSpeed || null, running: !!this.speedRunning, prep: this.lastPrep || null, traffic: this.trafficInfo() });
 };
 Daemon.prototype.measure = function (url, maxMs) {

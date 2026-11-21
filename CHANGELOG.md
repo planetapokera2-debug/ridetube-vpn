@@ -1,5 +1,31 @@
 # Changelog
 
+## App 10.0.0, service 10.0.0 (VPN build, modified version)
+
+Owner, 21.11.2026: the car's app list still said RideTube; a 720p video froze for seconds at 0:38 («Загружаю видео до
+этого места: 0:46 из 0:38»); leaving the video for a list (the app still open) kept the sound playing.
+
+- The name in the car's app list. The car takes the entry's name from the package's HMI texts
+  (rhmiData/variantGroups/Common/texts/*.json, SID_JAP_RIDETUBE_TITLE), which still said RideTube in every language:
+  the 0.3.21 rename changed app.json and the app's own texts only. tools/patch_app.py now writes the app's title
+  there (and the screen's title) and refuses to build a package whose texts name RideTube.
+- Our own numbering, 10.0.0, far above the original's (JustAnotherPU: app 0.5.1, service 0.4.8 on 21.11.2026). The ids
+  are the same, so a Store that also lists the original's source would install whichever is newer; at 10 ours stays.
+  The app needs service 10.0.0: with the original's service (0.4.x) the page says to update «ТвойТюб: служба».
+- No more freezes every few seconds on a link too slow for the video. The service waited until 10 s were fetched
+  ahead, played them and waited again. Now a wait while this video comes slower than 1.15x its playback fetches it a
+  step lower (720p -> 480p -> 360p) for the rest of it, the sound kept, and the page says so for 10 s («Связь не успевает
+  за 720p: дальше этот ролик в 480p»). With Auto quality, the next videos start at that height for 30 minutes. A link
+  fast enough waits as before (a seek past the video fetched).
+- The wait says how long: «Загружаю видео: ещё 2 с» (time events carry `wait_to`); «0:46 из 0:38» read as fetched past it.
+- Leaving the player for a page of the app (the back arrow, the controller pushed left, the HMI's Player button) pauses
+  the video, as leaving the app does: the same setting, now «Пауза при уходе из видео или приложения» (on by
+  default). Back in the player (Playing on the rail, the HMI's Player) a video paused so plays on; one the owner had
+  paused stays paused. A video still preparing when left pauses once it starts.
+- Tests: the step-down (a slow link, a fast one, 480 -> 360, the lowest, Auto's next video, a set quality); the
+  wait's text; the step-down's line; leaving the player (pause, play on, paused before, preparing, the setting off);
+  the original's service version is old. Node 25 and Node 8.
+
 ## App 0.3.23 (VPN build, modified version)
 
 - The icon the owner chose (20.11.2026, «Т9 Старт» of the logo canvas): the engine START button, a play mark in place

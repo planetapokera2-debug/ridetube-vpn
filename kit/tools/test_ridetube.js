@@ -336,14 +336,17 @@ async function appFrames() {
     assert.strictEqual(d.cmds('thumb').length, 0, 'no tiles, no thumbs');
     assert.strictEqual(d.cmds('library').length, 0, 'no library asked');
     // an app updated without its service: a line on the page says which one to update (state events say the version, 0.3.13 on)
-    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 0.3.17';
+    const OLDS = 'Update the RideTube service in the MGU Store: an older one on the car, this app needs 10.0.0';
     d.send({ ev: 'state', state: 'idle' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(said.indexOf(OLDS) >= 0, 'an older service: ' + said.join('|'));
     d.send({ ev: 'state', state: 'idle', version: '0.3.16' });
     await sleep(100); said.length = 0; await hu.loopFn();
-    assert.ok(said.some((x) => /: 0\.3\.16 on the car, this app needs 0\.3\.17$/.test(x)), '0.3.16: ' + said.join('|'));
-    d.send({ ev: 'state', state: 'idle', version: '0.3.17' });
+    assert.ok(said.some((x) => /: 0\.3\.16 on the car, this app needs 10\.0\.0$/.test(x)), '0.3.16: ' + said.join('|'));
+    d.send({ ev: 'state', state: 'idle', version: '0.4.8' });          // the original author's service (JustAnotherPU)
+    await sleep(100); said.length = 0; await hu.loopFn();
+    assert.ok(said.some((x) => /: 0\.4\.8 on the car, this app needs 10\.0\.0$/.test(x)), 'the original\'s 0.4.8: ' + said.join('|'));
+    d.send({ ev: 'state', state: 'idle', version: '10.0.0' });
     await sleep(100); said.length = 0; await hu.loopFn();
     assert.ok(!said.some((x) => /Update the RideTube service/.test(x)), 'the one it needs: no line');
     console.log('ok   an older service (or one that does not say its version): the page says to update it');
@@ -523,6 +526,15 @@ async function appFrames() {
         said.length = 0; await hu.loopFn();
         assert.ok(disp.pageTargets.find((t) => t.key === 'ov:play').w < 300, 'waiting: the overlay stays');
         assert.ok(said.indexOf('Loading the video up to here: 0:12 of 0:40') >= 0, said.join('|'));
+        // 10.0.0: the service says where it waits to - «ещё N с» (the photo: «0:46 из 0:38» read as fetched past it)
+        d.send({ ev: 'time', elapsed: 38000, total: 2224000, fetched: 46000, wait_to: 48000 });
+        await sleep(100); said.length = 0; await hu.loopFn();
+        assert.ok(said.indexOf('Loading the video: 2 s more') >= 0, said.join('|'));
+        // the link too slow for 720p: the service steps down, the page says so (10 s)
+        d.send({ ev: 'stepdown', id: 'aaa', from: 720, to: 480, x: 0.9 });
+        await sleep(100); said.length = 0; await hu.loopFn();
+        assert.ok(said.indexOf('The link is too slow for 720p: 480p for the rest of this video') >= 0, said.join('|'));
+        d.send({ ev: 'time', elapsed: 40000, total: 200000, fetched: 12000 });
         assert.ok(!said.some((x) => /^скорость 0 км\/ч/.test(x)), 'the diagnostics: off by default (0.3.17)');
         hu.ctx.settings.set('diag', true);
         await sleep(50); said.length = 0; await hu.loopFn();
@@ -657,6 +669,56 @@ async function appFrames() {
         await hu.loopFn();
         assert.strictEqual(disp.focusKey, 'tgt:r:0:lib1', 'the controller back on the tile it left from');
         console.log('ok   no bar, rail (Playing while a video plays), back from the player onto the tile');
+        // 10.0.0 (owner, 21.11.2026: «выхожу из видео, но не выхожу из программы, звук продолжает идти»): leaving the
+        // player for a page of the app pauses it (Pause on leaving, on by default); back in the player it plays on; one
+        // still preparing pauses once it starts; the setting off: it plays on
+        const cmdsOf = (k) => d.cmds(k).length;
+        const intoPlayer = async () => { disp.pageTargets.find((t) => t.key === 'r:0:lib1').run(); await hu.loopFn(); assert.ok(keys().indexOf('ov:back') >= 0, 'in the player'); };
+        await intoPlayer();
+        d.send({ ev: 'state', state: 'playing', id: 'lib1', title: 'First' }); await sleep(100);
+        let p0 = cmdsOf('pause'), r0 = cmdsOf('resume');
+        assert.ok(disp.onBack(false) === true); await hu.loopFn(); await sleep(150);
+        assert.strictEqual(cmdsOf('pause'), p0 + 1, 'left the player: paused');
+        d.send({ ev: 'state', state: 'paused', id: 'lib1', title: 'First' }); await sleep(100); await hu.loopFn();
+        assert.ok(keys().indexOf('rail:player') >= 0, 'paused: Playing on the rail');
+        disp.pageTargets.find((t) => t.key === 'rail:player').run(); await hu.loopFn(); await sleep(150);
+        assert.strictEqual(cmdsOf('resume'), r0 + 1, 'back in the player: plays on');
+        d.send({ ev: 'state', state: 'playing', id: 'lib1', title: 'First' }); await sleep(100);
+        // the overlay's back arrow too
+        p0 = cmdsOf('pause');
+        disp.pageTargets.find((t) => t.key === 'ov:back').run(); await hu.loopFn(); await sleep(150);
+        assert.strictEqual(cmdsOf('pause'), p0 + 1, 'the back arrow: paused');
+        d.send({ ev: 'state', state: 'paused', id: 'lib1', title: 'First' }); await sleep(100);
+        // paused by the owner before leaving: back in the player it stays paused
+        r0 = cmdsOf('resume');
+        hu.handlers.BTN_LIST(); await hu.loopFn(); await sleep(150);
+        assert.strictEqual(cmdsOf('resume'), r0 + 1, 'Playing from the HMI menu: plays on');
+        d.send({ ev: 'state', state: 'paused', id: 'lib1', title: 'First' }); await sleep(100);
+        assert.ok(disp.onBack(false) === true); await hu.loopFn();
+        r0 = cmdsOf('resume');
+        disp.pageTargets.find((t) => t.key === 'rail:player').run(); await hu.loopFn(); await sleep(150);
+        assert.strictEqual(cmdsOf('resume'), r0, 'paused before leaving: stays paused');
+        assert.ok(disp.onBack(false) === true); await hu.loopFn();
+        // still preparing when left: paused once it starts (and only then)
+        d.send({ ev: 'state', state: 'idle' }); await sleep(100); await hu.loopFn();
+        await intoPlayer();
+        assert.strictEqual(hu.ctx.settings.get('stop_on_leave'), true);
+        p0 = cmdsOf('pause');
+        assert.ok(disp.onBack(false) === true); await hu.loopFn(); await sleep(150);
+        assert.strictEqual(cmdsOf('pause'), p0, 'preparing: nothing to pause yet');
+        d.send({ ev: 'state', state: 'playing', id: 'lib1', title: 'First' }); await sleep(200);
+        assert.strictEqual(cmdsOf('pause'), p0 + 1, 'started while away from the player: paused');
+        // the setting off: leaving the player plays on
+        hu.ctx.settings.set('stop_on_leave', false);
+        await intoPlayer();
+        d.send({ ev: 'state', state: 'playing', id: 'lib1', title: 'First' }); await sleep(100);
+        p0 = cmdsOf('pause');
+        assert.ok(disp.onBack(false) === true); await hu.loopFn();
+        d.send({ ev: 'state', state: 'playing', id: 'lib1', title: 'First' }); await sleep(200);
+        assert.strictEqual(cmdsOf('pause'), p0, 'Pause on leaving off: plays on');
+        hu.ctx.settings.set('stop_on_leave', true);
+        d.send({ ev: 'state', state: 'idle' }); await sleep(100); await hu.loopFn();
+        console.log('ok   leaving the player pauses (back arrow, pushed left), back in it plays on; preparing: once it starts; the setting off: plays on');
         // every HMI button, then every target of the results and of the player, each pressed once: nothing throws
         // (an app error throws here: quiet.error), each screen still draws
         const press = async (fn) => { await Promise.race([Promise.resolve().then(fn), sleep(1500)]); await sleep(30); await hu.loopFn(); };
@@ -928,7 +990,7 @@ async function appFrames() {
         console.log('ok   autoplay: the next video in the row, 5 s after the end');
         // Settings: the rail's gear; asks how the videos come; a quality chip changes only the setting (the next video),
         // This video too fetches it again; Check speed; the switches; the net event drawn
-        d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP', height: 480, version: '0.3.17' });
+        d.send({ ev: 'state', state: 'playing', id: 'ZYXWVUTSRQP', height: 480, version: '10.0.0' });
         hu.ctx.settings.set('quality', 'auto');
         hu.handlers.BTN_RESULTS();
         await sleep(100); await hu.loopFn();
@@ -1007,7 +1069,7 @@ async function appFrames() {
         // Play the queue plays the first, the next of it follows at the end; a played one leaves it; Clear takes two presses; kept
         const tap = (k) => { const t = disp.pageTargets.find((x) => x.key === k); assert.ok(t, k + ': ' + keys()); return t.run(); };
         const qfile = path.join(dir, 'queue.json'), qids = () => JSON.parse(fs.readFileSync(qfile, 'utf8')).map((r) => r.id);
-        d.send({ ev: 'state', state: 'idle', version: '0.3.19' });
+        d.send({ ev: 'state', state: 'idle', version: '10.0.0' });
         d.send({ ev: 'results', q: d.cmds('search').slice(-1)[0].q, items: ['QQQQQQQQQQ1', 'QQQQQQQQQQ2', 'QQQQQQQQQQ3'].map((id) => ({ id: id, title: 'Song ' + id.slice(-1), channel: 'Band', duration_s: 200 })) });
         hu.handlers.BTN_RESULTS();
         await sleep(100); await hu.loopFn();
@@ -1182,13 +1244,13 @@ function serviceVersion() {
     assert.strictEqual(m.serviceOld(), null, 'not said yet: no warning');
     m.onMsg({ ev: 'state', state: 'idle' });
     assert.strictEqual(m.serviceOld(), 'old', 'a state event without a version: an older service');
-    [['0.3.12', '0.3.12'], ['0.3.16', '0.3.16'], ['0.3.17', null], ['0.3.20', null], ['0.4.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
+    [['0.3.12', '0.3.12'], ['0.3.19', '0.3.19'], ['0.4.8', '0.4.8'], ['0.5.1', '0.5.1'], ['9.9.9', '9.9.9'], ['10.0.0', null], ['10.0.1', null], ['10.1.0', null], ['11.0.0', null], ['0.2.99', '0.2.99']].forEach(([v, want]) => {
         m.onMsg({ ev: 'state', state: 'idle', version: v });
         assert.strictEqual(m.serviceOld(), want, v);
     });
     m.setConnected(false);
     assert.strictEqual(m.serviceOld(), null, 'not connected: the other notice');
-    console.log('ok   the service version: older than 0.3.17 (or not said) is old');
+    console.log('ok   the service version: older than 10.0.0 (ours; the original\'s 0.4/0.5, or not said) is old');
 }
 
 function channelSearch() {

@@ -104,6 +104,12 @@ def main():
         t = json.loads(members[n][1])
         t.update(texts)
         t = {k: both.get(v, v) for k, v in t.items()}
+        # ТвойТюб (10.0.0; owner 21.11.2026: the car's app list still said RideTube after the 0.3.21 rename): the
+        # entry's and the screen's titles in every language are the app's title (app.json), and no text names RideTube
+        for sid in ('SID_JAP_RIDETUBE_TITLE', 'SID_JAP_RIDETUBE_VIEW_TITLE'):
+            assert sid in t, (n, sid)
+            t[sid] = app['title']
+        t = {k: (v.replace('RideTube', app['title']) if isinstance(v, str) else v) for k, v in t.items()}
         put(n, json.dumps(t, ensure_ascii=False).encode('utf-8'))
     # the app's and the kit's code from this repository (identical to the published 0.3.8 but for the VPN build's changes)
     kr = os.path.join(ROOT, 'kit', 'runtime')
@@ -116,6 +122,11 @@ def main():
     for f in ('cyrillic.json', 'cyrillic-bold.json'):
         put('package/javascript/kit/fonts/' + f, open(os.path.join(FONTS, f), 'rb').read())
 
+    # the car shows the app list entry's textId (rhmiData/application.json) from these texts, not app.json's title
+    entry = json.loads(members['package/rhmiData/application.json'][1])['application']['entryPoints'][0]['textId']
+    for n in [x for x in members if x.startswith('package/rhmiData/variantGroups/Common/texts/') and x.endswith('.json')]:
+        t = json.loads(members[n][1])
+        assert t.get(entry) == app['title'] and not any('RideTube' in str(v) for v in t.values()), n
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w', format=tarfile.USTAR_FORMAT) as out:
         for name in sorted(members):

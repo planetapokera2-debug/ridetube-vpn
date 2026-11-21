@@ -158,7 +158,7 @@
  "Slow: 360p is best": "Медленно: лучше 360p",
  "The last video%s came %s× faster than it plays (%s Mbit/s)": "Последнее видео%s качалось в %s раза быстрее воспроизведения (%s Мбит/с)",
  "Other": "Другое",
- "Pause on leaving: %s": "Пауза при выходе: %s",
+ "Pause on leaving: %s": "Пауза при уходе из видео: %s",
  "on": "вкл",
  "off": "выкл",
  "Fill the screen: %s": "Заполнить экран: %s",
@@ -181,5 +181,7 @@
  "%s MB": "%s МБ",
  "%s GB": "%s ГБ",
  "Last preparing: lookup %s s · sound %s s (sound only)": "Последняя подготовка: поиск %s с · звук %s с (только звук)",
- "Video and sound: today %s · 30 days %s": "Видео и звук: сегодня %s · за 30 дней %s"
+ "Video and sound: today %s · 30 days %s": "Видео и звук: сегодня %s · за 30 дней %s",
+ "The link is too slow for %sp: %sp for the rest of this video": "Связь не успевает за %sp: дальше этот ролик в %sp",
+ "Loading the video: %s s more": "Загружаю видео: ещё %s с"
 }

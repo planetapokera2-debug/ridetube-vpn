@@ -83,7 +83,9 @@ class Ctl {
 
 const ACTIVE = ['preparing', 'playing', 'paused'];
 // the service this app needs (VPN build: the picture's wait past the video fetched, 0.3.12; its version said, 0.3.13)
-const SERVICE_NEED = '0.3.17';
+// 10.0.0 (21.11.2026): our own numbering, far above the original's (JustAnotherPU 0.5 / 0.4), so its releases never
+// replace ours in the Store (same ids); the original's service (0.4.x) is "older" and the page says to update it
+const SERVICE_NEED = '10.0.0';
 const older = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
 
 class Model {
@@ -101,6 +103,7 @@ class Model {
         this.state = 'idle'; this.pct = 0; this.id = null; this.title = ''; this.channel = '';
         this.elapsed = 0; this.total = 0;
         this.fetched = null;         // ms of video fetched so far (null: all, or a daemon that does not say)
+        this.waitTo = null;          // 10.0.0: waiting for the video, it plays on once fetched to there (ms)
         this.buffering = false;      // playing past it: the picture waits, the sound plays on
         this.error = null;
         this.videoOn = true;         // what the daemon was last told
@@ -226,6 +229,10 @@ class Model {
             if (typeof m.elapsed === 'number') this.elapsed = m.elapsed;
             if (typeof m.total === 'number') this.total = m.total;
             this.fetched = typeof m.fetched === 'number' ? m.fetched : null;
+            this.waitTo = typeof m.wait_to === 'number' ? m.wait_to : null;
+        } else if (m.ev === 'stepdown') {
+            // 10.0.0: the link gave this video slower than it plays - the service fetches it a step lower
+            if (m.id === this.id) this.toast = { text: tr('The link is too slow for %sp: %sp for the rest of this video', m.from, m.to), until: Date.now() + 10000 };
         } else if (m.ev === 'error') {
             // a daemon older than the account commands: no sign-in, nothing wrong with playback
             if (/^unknown cmd (auth|auth_status|sign_out|feed)$/.test(m.msg)) { this.auth = { state: 'unsupported', code: null, url: null, msg: null }; this._changed(); return; }
@@ -292,6 +299,7 @@ class Model {
         // the account's own resume point (the tile's), used by the daemon when this car never played it
         return this.send(Object.assign({ cmd: 'play', id, rect, fill: !!fill }, r && r.start_s > 0 ? { at: r.start_s * 1000 } : {}, o || {}));
     }
+    pause() { return this.state === 'playing' ? this.send({ cmd: 'pause' }) : false; }
     toggle() {
         if (this.state === 'playing') return this.send({ cmd: 'pause' });
         if (this.state === 'paused') return this.send({ cmd: 'resume' });

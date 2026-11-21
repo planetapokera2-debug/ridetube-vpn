@@ -86,7 +86,7 @@ mgu.run({
         const ctl = new Ctl(process.env.MGU_YT_SOCKET || SOCKET, log);
         const model = new Model((o) => ctl.send(o));
         let mode = 'home', browse = 'home', dirty = true;   // browse: the list the player goes back to
-        const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); leftPlay(); };
+        const changed = () => { dirty = true; if (ctx.background) ctx.background('playing', model.active()); labels(); leftPlay(); leftPlayerCheck(); };
         if (settings.onChange) settings.onChange(() => { dirty = true; });     // (the settings sheet's, the Settings page's: drawn at once)
         const isFeed = (m) => FEEDS.indexOf(m) >= 0;
         // a feed tab: signed in, (re)load it; signed out, ask for a sign-in code (the daemon says the one shown again).
@@ -99,10 +99,30 @@ mgu.run({
             if (mode === 'subs') model.loadChannels();                    // Home's last shelf (one request at a time: idempotent)
         };
         const backKey = {};                              // page -> the tile the controller was on when it was left
+        // 10.0.0 (owner, 21.11.2026: «выхожу из видео, но не выхожу из программы, звук продолжает идти»): leaving the
+        // player for a page of the app pauses it, as leaving the app does (the same setting, Pause on leaving); one
+        // still preparing pauses once it starts. Back in the player (Now playing), a video paused so plays on.
+        let leftPlayer = null;                           // {id, prep}: paused (or to pause) by leaving the player
+        function leavePlayer() {
+            if (settings.get('stop_on_leave') === false) return;
+            if (model.state === 'playing') { log.info('left the player: paused'); model.pause(); leftPlayer = { id: model.id, prep: false }; }
+            else if (model.state === 'preparing') leftPlayer = { id: model.id, prep: true };
+        }
+        function leftPlayerCheck() {
+            if (!leftPlayer || !leftPlayer.prep || model.state === 'preparing') return;
+            leftPlayer.prep = false;
+            if (model.state === 'playing' && mode !== 'player' && model.id === leftPlayer.id) { log.info('left the player while preparing: paused'); model.pause(); }
+        }
         function show(m) {
             if (m !== mode) { dirty = true; if (laid.mode === mode && laid.where[focusKey]) backKey[mode] = focusKey; }   // (a tile of this page)
+            const was = mode;
             mode = m;
             if (m !== 'player') browse = m; else wake();
+            if (was === 'player' && m !== 'player') leavePlayer();
+            else if (m === 'player' && was !== 'player' && leftPlayer) {
+                const lp = leftPlayer; leftPlayer = null;
+                if (!lp.prep && model.state === 'paused' && model.id === lp.id) { log.info('back in the player: plays on'); model.toggle(); }
+            }
             openFeed(); sync(); labels();
         }
         function goBack(m) {
@@ -402,6 +422,10 @@ mgu.run({
         // it stays while there is no moving picture to look at
         // the sound and the picture waiting for the video still being fetched (a seek past it, a slow link): the overlay says so
         const loading = () => model.state === 'playing' && model.buffering && !noVideo();
+        // 10.0.0: how long the wait is («ещё N с»; before: «0:46 из 0:38», which read as fetched past the point)
+        const waitText = () => model.waitTo !== null && model.fetched !== null && model.waitTo > model.fetched
+            ? tr('Loading the video: %s s more', Math.max(1, Math.ceil((model.waitTo - model.fetched) / 1000)))
+            : tr('Loading the video up to here: %s of %s', clock(model.fetched || 0), clock(model.elapsed));
         const pinned = () => model.state !== 'playing' || !videoShown || noVideo() || !!askSeg() || loading();
         const overlay = () => pinned() || Date.now() < ovUntil || Date.now() < qrUntil;
         // a tap beside the controls (no target): hides them
@@ -992,7 +1016,7 @@ mgu.run({
             else if (model.audioOnly) mid = tr('Sound only: this video was started while driving');
             else if (!cv.place || !gpu()) mid = tr('The picture needs the GPU renderer (mgu-render) - the sound plays');
             else if (!videoShown) mid = tr('Starting the picture...');
-            else if (loading()) mid = tr('Loading the video up to here: %s of %s', clock(model.fetched || 0), clock(model.elapsed));
+            else if (loading()) mid = waitText();
             if (model.state === 'paused' && !mid) { cv.circle(cx, cy, 60, '#000000a0'); cv.arc(cx, cy, 57, 60, 0, 360, '#ffffff50'); tri(cv, cx + 5, cy, 46, '#ffffff'); }
             if (mid) {
                 if (model.state === 'paused') { cv.circle(cx, cy - 40, 46, '#000000a0'); tri(cv, cx + 4, cy - 40, 36, '#ffffff'); }
@@ -1166,7 +1190,7 @@ mgu.run({
             else if (noVideo()) mid = tr('Video stops while driving - the sound plays on');
             else if (!gpu()) mid = tr('The picture needs the GPU renderer (mgu-render) - the sound plays');
             else if (live && !videoShown) mid = tr('Starting the picture...');
-            else if (loading()) mid = tr('Loading the video up to here: %s of %s', clock(model.fetched || 0), clock(model.elapsed));
+            else if (loading()) mid = waitText();
             if (model.state === 'preparing') {
                 const p = Math.max(0, Math.min(100, model.pct || 0));
                 cv.circle(cx, cy, 56, '#00000099');
