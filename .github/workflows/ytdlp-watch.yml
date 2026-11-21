@@ -1,0 +1,114 @@
+# yt-dlp каждый день: вышла новая версия - собираем с ней ytdlp.pyz службы (tools/build_pyz.sh), гоняем тесты службы,
+# включая настоящую загрузку видео с YouTube, и заводим задачу в этом репозитории (GitHub пришлёт письмо).
+# В Store ничего не выпускает: выпуск «ТвойТюб: служба» делается с компьютера (release.py).
+# Ручной запуск с галкой «current»: то же для закреплённой версии, без задачи - проверка самой проверки.
+name: yt-dlp (новая версия)
+on:
+  schedule:
+    - cron: '17 4 * * *'        # каждый день, 07:17 по Москве
+  workflow_dispatch:
+    inputs:
+      current:
+        description: 'Проверить закреплённую версию (без задачи)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: ytdlp-watch
+  cancel-in-progress: false
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Есть ли новая версия
+        id: v
+        run: |
+          PIN=$(sed -n 's/^YTDLP_VERSION=//p' native/jap-ridetube-d/tools/build_pyz.sh)
+          NEW=$(gh api repos/yt-dlp/yt-dlp/releases/latest --jq .tag_name)
+          echo "в службе $PIN, последняя $NEW"
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.current }}" = "true" ]; then
+            echo "new=$PIN" >> "$GITHUB_OUTPUT"; echo "run=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          [ "$NEW" != "$PIN" ] || { echo "новой версии нет"; exit 0; }
+          HAVE=$(gh issue list -R "$GITHUB_REPOSITORY" --state all --limit 300 --json title \
+                 --jq "[.[] | select(.title | startswith(\"yt-dlp $NEW:\"))] | length")
+          [ "$HAVE" = "0" ] || { echo "задача про $NEW уже есть"; exit 0; }
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"; echo "run=1" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        if: steps.v.outputs.run
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        if: steps.v.outputs.run
+        with:
+          python-version: '3.12'
+      - name: ffmpeg (сверка видео в тесте)
+        if: steps.v.outputs.run
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: ytdlp.pyz с новой версией
+        if: steps.v.outputs.run
+        id: b
+        working-directory: native/jap-ridetube-d
+        run: |
+          NEW=${{ steps.v.outputs.new }}
+          SHA=$(curl -fsSL --retry 3 "https://github.com/yt-dlp/yt-dlp/releases/download/$NEW/SHA2-256SUMS" | awk '$2=="yt-dlp"{print $1}')
+          [ -n "$SHA" ] || { echo "нет sha256 для yt-dlp $NEW"; exit 1; }
+          sed -i "s/^YTDLP_VERSION=.*/YTDLP_VERSION=$NEW/; s/^YTDLP_SHA256=.*/YTDLP_SHA256=$SHA/" tools/build_pyz.sh
+          sh tools/build_pyz.sh python3
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - name: Тесты службы с новой версией (и настоящая загрузка с YouTube)
+        if: steps.v.outputs.run
+        id: t
+        continue-on-error: true
+        working-directory: native/jap-ridetube-d
+        run: |
+          set -o pipefail
+          python3 -m unittest discover -s test -p 'test_ytfetch.py' -v 2>&1 | tee "$RUNNER_TEMP/new.txt"
+          ! grep -q "skipped 'no network" "$RUNNER_TEMP/new.txt" || { echo "живая загрузка пропущена"; exit 1; }
+      - name: Для сравнения - живая загрузка с версией из службы
+        if: steps.v.outputs.run && steps.t.outcome == 'failure'
+        id: old
+        continue-on-error: true
+        working-directory: native/jap-ridetube-d
+        run: |
+          set -o pipefail
+          git checkout -- tools/build_pyz.sh
+          sh tools/build_pyz.sh python3
+          cd test && python3 -m unittest -v test_ytfetch.Online 2>&1 | tee "$RUNNER_TEMP/old.txt"
+          ! grep -q "skipped 'no network" "$RUNNER_TEMP/old.txt"
+      - name: Итог и задача
+        if: steps.v.outputs.run
+        run: |
+          NEW=${{ steps.v.outputs.new }}; PIN=${{ steps.v.outputs.pin }}; SHA=${{ steps.b.outputs.sha }}
+          RUN="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          YT=$(gh api "repos/yt-dlp/yt-dlp/releases/tags/$NEW" --jq .body | grep -ciE '\*\*youtube' || true)
+          if [ "${{ steps.t.outcome }}" = "success" ]; then
+            RES="✅ Все тесты службы прошли, включая настоящую загрузку видео с YouTube."
+          elif [ "${{ steps.old.outcome }}" = "failure" ]; then
+            RES="⚠️ Тесты не прошли, но и с версией $PIN живая загрузка здесь не идёт: скорее всего YouTube не пускает серверы GitHub. Проверим с компьютера."
+          else
+            RES="❌ С версией $NEW тесты не прошли, а с $PIN живая загрузка работает: обновлять пока не надо."
+          fi
+          FAILED=$(grep -E '^(FAIL|ERROR): ' "$RUNNER_TEMP/new.txt" | sed 's/^/    /' || true)
+          {
+            echo "Вышла yt-dlp **$NEW**, в службе «ТвойТюб: служба» сейчас **$PIN**."
+            echo "Что нового: https://github.com/yt-dlp/yt-dlp/releases/tag/$NEW"
+            if [ "$YT" != "0" ]; then echo "В выпуске есть правки YouTube: обновить стоит."; else echo "Правок YouTube в выпуске нет: можно не спешить."; fi
+            echo
+            echo "**Проверка:** $RES"
+            [ -z "$FAILED" ] || { echo; echo "Не прошли:"; echo; echo "$FAILED"; }
+            echo
+            echo "**Как обновить:** скажите Claude «обнови yt-dlp до $NEW». Он поставит версию и sha256 \`$SHA\` в \`native/jap-ridetube-d/tools/build_pyz.sh\`, проверит и выпустит новую «ТвойТюб: служба» в Store. После выпуска эту задачу можно закрыть."
+            echo
+            echo "Журнал проверки: $RUN"
+          } > "$RUNNER_TEMP/body.md"
+          cat "$RUNNER_TEMP/body.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ inputs.current }}" = "true" ]; then echo "ручная проверка текущей версии - без задачи"; exit 0; fi
+          gh issue create -R "$GITHUB_REPOSITORY" --title "yt-dlp $NEW: новая версия (в службе $PIN)" --body-file "$RUNNER_TEMP/body.md"
